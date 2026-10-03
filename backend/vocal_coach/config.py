@@ -54,6 +54,7 @@ class TranscriptionConfig(BaseModel):
     compute_type: str
     beam_size: int
     language: str | None
+    no_speech_exclude_prob: float
     fillers: list[str]
 
     @field_validator("fillers")

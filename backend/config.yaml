@@ -30,6 +30,7 @@ transcription:
   compute_type: int8
   beam_size: 5
   language: en
+  no_speech_exclude_prob: 0.6
   fillers: [um, uh, like, basically, actually, "you know", so]
 clarity:
   low_conf_word_prob: 0.5

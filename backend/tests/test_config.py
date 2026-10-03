@@ -44,6 +44,7 @@ def test_transcription_and_clarity_sections_load():
     assert cfg.transcription.compute_type == "int8"
     assert cfg.transcription.beam_size == 5
     assert cfg.transcription.language == "en"
+    assert cfg.transcription.no_speech_exclude_prob == 0.6
     assert cfg.transcription.fillers == ["um", "uh", "like", "basically", "actually", "you know", "so"]
     assert cfg.clarity.low_conf_word_prob == 0.5
     assert cfg.clarity.word_final_drop_db == 6
@@ -73,4 +74,4 @@ def test_empty_filler_rejected_at_load():
     import pytest
     from vocal_coach.config import TranscriptionConfig
     with pytest.raises(ValueError):
-        TranscriptionConfig(model_size="small", compute_type="int8", beam_size=5, language="en", fillers=["um", " "])
+        TranscriptionConfig(model_size="small", compute_type="int8", beam_size=5, language="en", no_speech_exclude_prob=0.6, fillers=["um", " "])

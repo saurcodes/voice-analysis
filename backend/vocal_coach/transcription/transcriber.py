@@ -24,6 +24,7 @@ class RawTranscription(NamedTuple):
     segments: list[TranscriptSegment]
     words: list[TranscriptWord]
     text: str
+    word_segment_index: list[int]  # internal: index into `segments` of each word's segment
 
 
 _MODEL_CACHE: dict[tuple[str, str], WhisperLike] = {}
@@ -60,6 +61,7 @@ def transcribe_audio(audio: np.ndarray, sample_rate: int, cfg: TranscriptionConf
     )
     segments: list[TranscriptSegment] = []
     words: list[TranscriptWord] = []
+    word_segment_index: list[int] = []
     for s in segments_iter:
         segments.append(TranscriptSegment(
             start_s=float(s.start), end_s=float(s.end), text=s.text.strip(),
@@ -69,6 +71,9 @@ def transcribe_audio(audio: np.ndarray, sample_rate: int, cfg: TranscriptionConf
             words.append(TranscriptWord(
                 start_s=float(w.start), end_s=float(w.end), word=w.word.strip(), probability=float(w.probability),
             ))
+            word_segment_index.append(len(segments) - 1)
     text = " ".join(s.text for s in segments if s.text)
     language = getattr(info, "language", None)
-    return RawTranscription(language=language, segments=segments, words=words, text=text)
+    return RawTranscription(
+        language=language, segments=segments, words=words, text=text, word_segment_index=word_segment_index,
+    )

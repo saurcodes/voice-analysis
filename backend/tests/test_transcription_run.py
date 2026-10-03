@@ -86,6 +86,21 @@ def test_build_transcript_reuses_given_tracks(cfg, tmp_path: Path, monkeypatch):
     assert np.array_equal(fake.audio[0], tracks.samples.astype(np.float32))
 
 
+def test_hallucinated_silence_segment_excluded_from_derived(cfg, tmp_path: Path):
+    wav = synth.write_wav(tmp_path / "s.wav", _audio())
+    fake = FakeWhisper([
+        seg(0.0, 1.5, " That is fine.", [
+            word(0.0, 0.4, " That", 0.9), word(0.4, 0.8, " is", 0.9), word(0.8, 1.5, " fine.", 0.9),
+        ]),
+        seg(3.0, 6.0, " So", [word(3.0, 3.4, " So", 0.6)], no_speech_prob=0.95),
+    ])
+    t = transcribe_file(wav, cfg, model=fake)
+    assert t.derived.word_count == 3
+    assert t.derived.filler_counts["so"] == 0
+    assert len(t.words) == 4
+    assert len(t.segments) == 2
+
+
 @pytest.mark.skipif(os.environ.get("VOCAL_COACH_REAL_WHISPER") != "1", reason="set VOCAL_COACH_REAL_WHISPER=1 to run the real model")
 def test_real_whisper_on_synthetic_speech_does_not_crash(cfg, tmp_path: Path):
     wav = synth.write_wav(tmp_path / "s.wav", _audio())

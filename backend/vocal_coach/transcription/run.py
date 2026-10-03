@@ -16,15 +16,22 @@ from vocal_coach.transcription.transcriber import RawTranscription, WhisperLike,
 
 
 def build_transcript(raw: RawTranscription, tracks: Tracks, duration_s: float, cfg: AppConfig) -> Transcript:
-    filler_counts = count_fillers(raw.words, cfg.transcription.fillers)
+    # Whisper hallucinates words in silent windows; those segments carry a high no_speech_prob.
+    # They stay in `segments`/`words` for inspection but are left out of every derived number.
+    limit = cfg.transcription.no_speech_exclude_prob
+    kept_seg = [s.no_speech_prob <= limit for s in raw.segments]
+    kept_segments = [s for s, keep in zip(raw.segments, kept_seg) if keep]
+    kept_words = [w for w, i in zip(raw.words, raw.word_segment_index) if kept_seg[i]]
+
+    filler_counts = count_fillers(kept_words, cfg.transcription.fillers)
     filler_total = sum(filler_counts.values())
     derived = DerivedBlock(
-        word_count=len(raw.words),
-        words_per_min=words_per_min(len(raw.words), duration_s),
+        word_count=len(kept_words),
+        words_per_min=words_per_min(len(kept_words), duration_s),
         filler_counts=filler_counts,
         filler_total=filler_total,
         fillers_per_min=per_min(filler_total, duration_s),
-        clarity=clarity.compute(raw.words, raw.segments, tracks, cfg.clarity),
+        clarity=clarity.compute(kept_words, kept_segments, tracks, cfg.clarity),
     )
     return Transcript(
         schema_version=TRANSCRIPT_SCHEMA_VERSION,

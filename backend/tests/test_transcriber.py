@@ -23,6 +23,7 @@ def test_transcribe_converts_segments_and_words(cfg):
     assert [w.word for w in raw.words] == ["Hello", "there.", "Um."]
     assert raw.words[2].probability == 0.4
     assert raw.text == "Hello there. Um."
+    assert raw.word_segment_index == [0, 0, 1]
 
 
 def test_transcribe_passes_fixed_decoding_settings(cfg):
