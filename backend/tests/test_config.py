@@ -75,3 +75,26 @@ def test_empty_filler_rejected_at_load():
     from vocal_coach.config import TranscriptionConfig
     with pytest.raises(ValueError):
         TranscriptionConfig(model_size="small", compute_type="int8", beam_size=5, language="en", no_speech_exclude_prob=0.6, fillers=["um", " "])
+
+
+def test_comparison_section_loads():
+    cfg = load_config()
+    assert cfg.comparison.min_meaningful_change_pct == 5
+    assert cfg.comparison.directions["pitch.f0_range_st"] == "up_good"
+    assert cfg.comparison.directions["phrasing.pauses_per_min"] == "neutral"
+    assert cfg.comparison.directions["transcript.derived.clarity.rushed_word_fraction"] == "down_good"
+    assert len(cfg.comparison.directions) == 15
+
+
+def test_comparison_direction_must_be_known():
+    import pytest
+    from vocal_coach.config import ComparisonConfig
+    with pytest.raises(ValueError):
+        ComparisonConfig(min_meaningful_change_pct=5, directions={"x": "sideways"})
+
+
+def test_config_hash_ignores_comparison():
+    src = load_config()
+    changed = src.model_copy(deep=True)
+    changed.comparison.min_meaningful_change_pct = 50
+    assert config_hash(src) == config_hash(changed)

@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -77,11 +77,22 @@ class ClarityConfig(BaseModel):
     low_logprob_segment: float
 
 
+Direction = Literal["up_good", "down_good", "neutral"]
+
+
+class ComparisonConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_meaningful_change_pct: float
+    directions: dict[str, Direction]
+
+
 class AppConfig(BaseModel):
     analysis: AnalysisConfig
     articulation: ArticulationConfig
     transcription: TranscriptionConfig
     clarity: ClarityConfig
+    comparison: ComparisonConfig
     raw: dict[str, Any]
     """The full YAML document, for sections validated by later plans."""
 
@@ -95,6 +106,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         articulation=ArticulationConfig(**raw["articulation"]),
         transcription=TranscriptionConfig(**raw["transcription"]),
         clarity=ClarityConfig(**raw["clarity"]),
+        comparison=ComparisonConfig(**raw["comparison"]),
         raw=raw,
     )
 
