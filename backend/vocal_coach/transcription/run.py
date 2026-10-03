@@ -12,7 +12,7 @@ from vocal_coach.config import AppConfig, load_config
 from vocal_coach.transcription import clarity
 from vocal_coach.transcription.fillers import count_fillers, per_min, words_per_min
 from vocal_coach.transcription.schema import TRANSCRIPT_SCHEMA_VERSION, DerivedBlock, Transcript
-from vocal_coach.transcription.transcriber import RawTranscription, WhisperLike, load_model, transcribe_wav
+from vocal_coach.transcription.transcriber import RawTranscription, WhisperLike, get_model, transcribe_audio
 
 
 def build_transcript(raw: RawTranscription, tracks: Tracks, duration_s: float, cfg: AppConfig) -> Transcript:
@@ -43,11 +43,16 @@ def transcribe_file(
     model: WhisperLike | None = None,
     tracks: Tracks | None = None,
 ) -> Transcript:
+    """Transcribe a WAV and assemble the transcript document.
+
+    `wav_path` is read only when `tracks` is not supplied; when `tracks` is given it must
+    describe the same recording. `Tracks.samples` is channel 0 of the WAV; production audio
+    is mono 16 kHz from `analysis.audio.extract_wav`.
+    """
     if tracks is None:
         tracks = extract_tracks(parselmouth.Sound(str(wav_path)), cfg.analysis)
-    if model is None:
-        model = load_model(cfg.transcription)
-    raw = transcribe_wav(wav_path, cfg.transcription, model)
+    model = model or get_model(cfg.transcription)
+    raw = transcribe_audio(tracks.samples, tracks.sr, cfg.transcription, model)
     return build_transcript(raw, tracks, duration_s=tracks.duration_s, cfg=cfg)
 
 

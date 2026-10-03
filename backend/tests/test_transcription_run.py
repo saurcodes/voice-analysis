@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from tests import synth
@@ -10,7 +11,8 @@ from vocal_coach.analysis.serialise import to_canonical_json
 from vocal_coach.analysis.tracks import extract_tracks
 from vocal_coach.transcription.run import build_transcript, transcribe_file
 from vocal_coach.transcription.schema import TRANSCRIPT_SCHEMA_VERSION, Transcript
-from vocal_coach.transcription.transcriber import transcribe_wav
+from vocal_coach.transcription import run
+from vocal_coach.transcription.transcriber import transcribe_audio
 
 
 def _audio():
@@ -66,12 +68,22 @@ def test_no_speech_gives_empty_transcript_that_serialises(cfg, tmp_path: Path):
     to_canonical_json(t)
 
 
-def test_build_transcript_reuses_given_tracks(cfg, tmp_path: Path):
+def test_build_transcript_reuses_given_tracks(cfg, tmp_path: Path, monkeypatch):
     x = _audio()
     tracks = extract_tracks(synth.to_sound(x), cfg.analysis)
-    raw = transcribe_wav(tmp_path / "unused.wav", cfg.transcription, _fake())
+    raw = transcribe_audio(tracks.samples, tracks.sr, cfg.transcription, _fake())
     t = build_transcript(raw, tracks, duration_s=tracks.duration_s, cfg=cfg)
     assert t.derived.word_count == 12
+    assert t.derived.clarity.word_final_drop_fraction is not None
+
+    def _boom(*a, **k):
+        raise AssertionError("extract_tracks must not run when tracks are supplied")
+
+    monkeypatch.setattr(run, "extract_tracks", _boom)
+    fake = _fake()
+    t2 = transcribe_file(tmp_path / "never-read.wav", cfg, model=fake, tracks=tracks)
+    assert t2.derived.word_count == 12
+    assert np.array_equal(fake.audio[0], tracks.samples.astype(np.float32))
 
 
 @pytest.mark.skipif(os.environ.get("VOCAL_COACH_REAL_WHISPER") != "1", reason="set VOCAL_COACH_REAL_WHISPER=1 to run the real model")
