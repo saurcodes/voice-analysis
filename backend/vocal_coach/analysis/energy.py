@@ -1,4 +1,9 @@
-"""Energy: body vs final window, per-phrase trailing off."""
+"""Energy: body vs final window, per-phrase trailing off.
+
+Final window = last `energy_window_s` seconds of speech, anchored at the end of
+the last phrase (trailing silence or a long tail after speech does not empty it).
+Body = speaking frames before that window.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -33,7 +38,8 @@ def compute(tracks: Tracks, cfg: AnalysisConfig, phrases: list[Interval]) -> Ene
     times = tracks.int_times
     inten = tracks.intensity_db
 
-    final_start = tracks.duration_s - cfg.energy_window_s
+    speech_end = max(ph.end_s for ph in phrases) if phrases else tracks.duration_s
+    final_start = speech_end - cfg.energy_window_s
     final_mask = speaking & (times >= final_start)
     body_mask = speaking & (times < final_start)
     if not body_mask.any():

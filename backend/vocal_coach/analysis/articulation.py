@@ -14,11 +14,13 @@ from vocal_coach.config import AnalysisConfig, ArticulationConfig
 # STFT framing: 25 ms Hann window, 10 ms hop (algorithm constants, not coaching thresholds).
 STFT_WINDOW_S = 0.025
 STFT_HOP_S = 0.010
-WELCH_NPERSEG = 1024
-FORMANT_TIME_STEP_S = 0.01
-FORMANT_COUNT = 5
-FORMANT_WINDOW_S = 0.025
-FORMANT_PREEMPHASIS_HZ = 50.0
+WELCH_NPERSEG = 1024  # Welch segment length in samples (64 ms at 16 kHz; ~16 Hz bins for band means)
+WELCH_NOVERLAP = WELCH_NPERSEG // 2  # 50 % overlap (scipy's default), stated so segment counts can be derived
+FORMANT_TIME_STEP_S = 0.01  # formant frame hop; matches the 10 ms pitch/intensity grid
+FORMANT_COUNT = 5  # Praat's default number of Burg formants searched below formant_max_hz
+FORMANT_WINDOW_S = 0.025  # Praat's default Burg analysis window length
+FORMANT_PREEMPHASIS_HZ = 50.0  # Praat's default pre-emphasis corner frequency
+MODULATION_MIN_FRAMES = 10  # fewer speaking frames than this gives a meaningless band-pass
 
 # A butter bandpass of order N decomposes into N second-order sections (sos),
 # so scipy's sosfiltfilt default padlen is 3 * (2 * N + 1) -- see its source
@@ -52,31 +54,56 @@ _EMPTY_VOWEL_SPACE = VowelSpace(
 )
 
 
-def _speaking_samples(tracks: Tracks, phrases: list[Interval]) -> np.ndarray:
-    parts = [tracks.samples[int(p.start_s * tracks.sr): int(p.end_s * tracks.sr)] for p in phrases]
-    return np.concatenate(parts) if parts else np.array([])
+def _phrase_samples(tracks: Tracks, phrases: list[Interval]):
+    """Yield each phrase's samples as a view (no end-to-end concatenation)."""
+    for p in phrases:
+        yield tracks.samples[int(p.start_s * tracks.sr): int(p.end_s * tracks.sr)]
 
 
-def _hf_ratio(x: np.ndarray, sr: int, art: ArticulationConfig) -> float | None:
+def _hf_ratio(tracks: Tracks, phrases: list[Interval], art: ArticulationConfig) -> float | None:
+    """Median over all speaking STFT frames of HF/LF band power, dB. STFT runs per phrase."""
+    sr = tracks.sr
     nper = int(STFT_WINDOW_S * sr)
     hop = int(STFT_HOP_S * sr)
-    if len(x) < nper:
-        return None
-    f, _, z = stft(x, fs=sr, window="hann", nperseg=nper, noverlap=nper - hop, boundary=None)
-    power = np.abs(z) ** 2
-    hf = power[(f >= art.hf_band_hz[0]) & (f <= art.hf_band_hz[1])].sum(axis=0)
-    lf = power[(f >= art.lf_band_hz[0]) & (f <= art.lf_band_hz[1])].sum(axis=0)
-    ok = lf > 0
-    if not ok.any():
-        return None
-    return float(np.median(10 * np.log10(hf[ok] / lf[ok])))
+    ratios: list[np.ndarray] = []
+    for x in _phrase_samples(tracks, phrases):
+        if len(x) < nper:
+            continue
+        f, _, z = stft(x, fs=sr, window="hann", nperseg=nper, noverlap=nper - hop, boundary=None)
+        power = np.abs(z) ** 2
+        hf = power[(f >= art.hf_band_hz[0]) & (f <= art.hf_band_hz[1])].sum(axis=0)
+        lf = power[(f >= art.lf_band_hz[0]) & (f <= art.lf_band_hz[1])].sum(axis=0)
+        ok = (lf > 0) & (hf > 0)
+        ratios.append(10 * np.log10(hf[ok] / lf[ok]))
+    frames = np.concatenate(ratios) if ratios else np.array([])
+    return float(np.median(frames)) if len(frames) else None
 
 
-def _tilt(x: np.ndarray, sr: int, art: ArticulationConfig) -> float | None:
+def _speech_psd(tracks: Tracks, phrases: list[Interval]):
+    """Welch PSD over speaking samples: per-phrase PSDs averaged, weighted by Welch segment count."""
+    total = None
+    weight = 0
+    freqs = None
+    hop = WELCH_NPERSEG - WELCH_NOVERLAP
+    for x in _phrase_samples(tracks, phrases):
+        if len(x) < WELCH_NPERSEG:
+            continue
+        f, p = welch(x, fs=tracks.sr, nperseg=WELCH_NPERSEG, noverlap=WELCH_NOVERLAP)
+        n_seg = (len(x) - WELCH_NPERSEG) // hop + 1
+        total = p * n_seg if total is None else total + p * n_seg
+        weight += n_seg
+        freqs = f
+    if total is None:
+        return None
+    return freqs, total / weight
+
+
+def _tilt(tracks: Tracks, phrases: list[Interval], art: ArticulationConfig) -> float | None:
     """Two-band spectral tilt (hf vs lf band mean power), dB per octave."""
-    if len(x) < WELCH_NPERSEG:
+    psd = _speech_psd(tracks, phrases)
+    if psd is None:
         return None
-    f, p = welch(x, fs=sr, nperseg=WELCH_NPERSEG)
+    f, p = psd
     lf_mask = (f >= art.lf_band_hz[0]) & (f <= art.lf_band_hz[1])
     hf_mask = (f >= art.hf_band_hz[0]) & (f <= art.hf_band_hz[1])
     if not lf_mask.any() or not hf_mask.any():
@@ -92,7 +119,7 @@ def _tilt(x: np.ndarray, sr: int, art: ArticulationConfig) -> float | None:
 
 
 def _modulation_depth(tracks: Tracks, speaking: np.ndarray, acfg: AnalysisConfig, art: ArticulationConfig) -> float | None:
-    if speaking.sum() < 10:
+    if speaking.sum() < MODULATION_MIN_FRAMES:
         return None
     fs = 1.0 / acfg.time_step_s
     linear = 10 ** (tracks.intensity_db / 20.0)
@@ -151,15 +178,14 @@ def compute(
     f0_median_hz: float | None,
     recording_low_confidence: bool,
 ) -> ArticulationBlock:
-    speech = _speaking_samples(tracks, phrases)
     speaking = speaking_mask(tracks, phrases)
     proms = np.asarray(peak_prominences_db, dtype=float)
 
     low_conf = recording_low_confidence or (f0_median_hz is not None and f0_median_hz > acfg.low_confidence_f0_hz)
 
     return ArticulationBlock(
-        hf_energy_ratio_db=_hf_ratio(speech, tracks.sr, art) if len(speech) else None,
-        spectral_tilt_db_per_oct=_tilt(speech, tracks.sr, art) if len(speech) else None,
+        hf_energy_ratio_db=_hf_ratio(tracks, phrases, art),
+        spectral_tilt_db_per_oct=_tilt(tracks, phrases, art),
         modulation_depth=_modulation_depth(tracks, speaking, acfg, art),
         syllable_peak_prominence_mean_db=float(np.mean(proms)) if len(proms) else None,
         syllable_peak_prominence_p25_db=float(np.percentile(proms, 25)) if len(proms) else None,

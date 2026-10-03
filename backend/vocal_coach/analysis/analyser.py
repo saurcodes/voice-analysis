@@ -1,10 +1,6 @@
 """Run every analysis module on a WAV and assemble a MetricsReport. Also a CLI."""
 from __future__ import annotations
 
-import os
-
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-
 import argparse
 from pathlib import Path
 

@@ -55,3 +55,23 @@ def test_phrase_shorter_than_tail_is_skipped(cfg):
     blk = energy.compute(_tracks(x, cfg), cfg.analysis, [_phrase(0.0, 2.0), _phrase(3.0, 3.2)])
     assert len(blk.per_phrase_end_drop_db) == 1
     assert blk.trailing_off_count == 0
+
+
+def _raw_tracks(x, cfg):
+    return extract_tracks(synth.to_sound(x), cfg.analysis)
+
+
+def test_final_window_anchored_at_end_of_speech(cfg):
+    # 25 s loud + 15 s soft (-6 dB) + 20 s EXACT zeros: the trailing silence must not null the final window.
+    loud = synth.tone(120, 25.0)
+    soft = synth.tone(120, 15.0) * 10 ** (-6 / 20)
+    x = synth.concat(loud, soft, synth.silence(20.0))
+    blk = energy.compute(_raw_tracks(x, cfg), cfg.analysis, [_phrase(0.0, 40.0)])
+    assert blk.final_vs_body_db is not None
+    assert -7.5 < blk.final_vs_body_db < -4.5
+
+
+def test_final_window_present_when_file_ends_in_long_silence(cfg):
+    x = synth.concat(synth.tone(120, 10.0), synth.silence(30.0))
+    blk = energy.compute(_raw_tracks(x, cfg), cfg.analysis, [_phrase(0.0, 10.0)])
+    assert blk.final_15s_median_db is not None
