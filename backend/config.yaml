@@ -17,6 +17,7 @@ analysis:
   low_confidence_noise_floor_db: 45
   low_confidence_snr_db: 15
   low_confidence_f0_hz: 250
+  min_duration_s: 2.0
 articulation:
   hf_band_hz: [2000, 8000]
   lf_band_hz: [0, 1000]

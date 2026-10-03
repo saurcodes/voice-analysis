@@ -50,6 +50,49 @@ def test_silence_does_not_raise(cfg, tmp_path: Path):
     to_canonical_json(report)  # must serialise without NaN errors
 
 
+def test_too_short_recording_returns_empty_report(cfg, tmp_path: Path):
+    wav = synth.write_wav(tmp_path / "short.wav", synth.tone(120, 0.5))
+    report = analyse_wav(wav, cfg, _source(wav, 0.5))
+    rq = report.recording_quality
+    assert "too_short" in rq.reasons
+    assert rq.low_confidence is True
+    assert rq.noise_floor_db is None and rq.snr_estimate_db is None
+    assert report.pitch.f0_median_hz is None and report.pitch.voiced_fraction == 0.0
+    assert report.phrasing.phrase_count == 0
+    assert report.pace.syllable_count_est == 0
+    assert report.energy.final_vs_body_db is None
+    assert report.voice_quality.low_confidence is True
+    assert report.articulation.low_confidence is True
+    assert report.articulation.vowel_space.vowel_space_area_hz2 is None
+    assert report.timeline.windows == []
+    to_canonical_json(report)
+
+
+def test_tiny_recording_does_not_raise(cfg, tmp_path: Path):
+    wav = synth.write_wav(tmp_path / "tiny.wav", synth.tone(120, 0.02))
+    report = analyse_wav(wav, cfg, _source(wav, 0.02))
+    assert "too_short" in report.recording_quality.reasons
+    to_canonical_json(report)
+
+
+def test_digital_silence_recording(cfg, tmp_path: Path):
+    # Noise-gated export: EXACT zeros between and after speech, no with_noise_floor anywhere.
+    a = synth.am(synth.vowel(500, 1500, 120, 3.0), 4.0)
+    b = synth.am(synth.vowel(300, 2300, 130, 3.0), 4.5)
+    x = synth.concat(a, synth.silence(1.0), b, synth.silence(20.0))
+    wav = synth.write_wav(tmp_path / "gated.wav", x)
+    report = analyse_wav(wav, cfg, _source(wav, 27.0))
+    rq = report.recording_quality
+    assert rq.noise_floor_db == 0.0
+    assert 0 < rq.snr_estimate_db < 100
+    assert rq.low_confidence is False
+    assert report.articulation.syllable_peak_prominence_mean_db < 40
+    for w in report.timeline.windows:
+        assert w.intensity_median_db is None or w.intensity_median_db > 0
+    assert report.energy.final_vs_body_db is not None
+    to_canonical_json(report)
+
+
 @requires_ffmpeg
 def test_analyse_file_extracts_then_analyses(cfg, tmp_path: Path):
     src = synth.write_wav(tmp_path / "in.wav", _speechlike())

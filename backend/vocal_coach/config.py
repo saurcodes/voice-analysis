@@ -33,6 +33,7 @@ class AnalysisConfig(BaseModel):
     low_confidence_noise_floor_db: float
     low_confidence_snr_db: float
     low_confidence_f0_hz: float
+    min_duration_s: float
 
 
 class ArticulationConfig(BaseModel):

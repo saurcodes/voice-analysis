@@ -11,6 +11,7 @@ def test_load_default_config_has_spec_values():
     assert cfg.analysis.time_step_s == 0.01
     assert cfg.analysis.silence_threshold_db == -25
     assert cfg.analysis.intonation_threshold_st == 1.5
+    assert cfg.analysis.min_duration_s == 2.0
     assert cfg.articulation.hf_band_hz == (2000, 8000)
     assert cfg.articulation.formant_max_hz == 5500
 
