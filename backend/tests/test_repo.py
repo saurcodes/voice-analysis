@@ -102,3 +102,14 @@ def test_fail_stale_jobs(session):
     assert repo.get_job(session, u.id, q.id).error == "server restarted"
     assert repo.get_job(session, u.id, r.id).status == "failed"
     assert repo.get_job(session, u.id, d.id).status == "done"
+
+
+def test_list_tie_break_is_deterministic(session):
+    u = repo.upsert_user(session, "a", None, None)
+    when = utcnow()
+    a1 = _mk(session, u, sha="1" * 64, when=when)
+    a2 = _mk(session, u, sha="2" * 64, when=when)
+    ids1 = [x.id for x in repo.list_analyses(session, u.id)]
+    ids2 = [x.id for x in repo.list_analyses(session, u.id)]
+    assert ids1 == ids2
+    assert ids1 == sorted([a1.id, a2.id], reverse=True)

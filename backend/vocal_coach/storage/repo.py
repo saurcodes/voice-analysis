@@ -1,4 +1,6 @@
-"""All database access, strictly scoped by user_id. Rows the user does not own are None."""
+"""All database access, strictly scoped by user_id. Rows the user does not own are None.
+
+Exception: `update_job` is called by the job runner, which owns job state and has no user in hand; reads (`get_job`) remain scoped."""
 from __future__ import annotations
 
 import uuid
@@ -48,7 +50,7 @@ def create_analysis(
 
 
 def list_analyses(session: Session, user_id: uuid.UUID) -> list[Analysis]:
-    return list(session.scalars(select(Analysis).where(Analysis.user_id == user_id).order_by(Analysis.recorded_at.desc())))
+    return list(session.scalars(select(Analysis).where(Analysis.user_id == user_id).order_by(Analysis.recorded_at.desc(), Analysis.id.desc())))
 
 
 def get_analysis(session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID) -> Analysis | None:
