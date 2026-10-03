@@ -58,3 +58,16 @@ The first run downloads the model (~460 MB for `small`) into the Hugging Face ca
 ### Pinned dependencies — what bumps `ANALYSER_VERSION`
 
 Only changes to packages that affect `metrics.json` numbers (praat-parselmouth, numpy, scipy, and the ffmpeg binary) require an `ANALYSER_VERSION` bump. Transcription packages (faster-whisper, ctranslate2, tokenizers) do not touch `metrics.json`; `transcript.json → model` records the model size only; package versions live in `requirements.lock`.
+
+## Storage (Plan 3)
+
+Postgres via SQLAlchemy 2 + Alembic. Tables: `users`, `drive_connections`, `analyses` (unique on user + file hash + config hash), `jobs`. Every repository read is scoped by `user_id`; other users' rows read as missing.
+
+```bash
+export DATABASE_URL=postgresql+psycopg://vocal:vocal@localhost:5432/vocal_coach
+alembic upgrade head          # or: python -c "from vocal_coach.storage.migrate import upgrade_to_head as u; import os; u(os.environ['DATABASE_URL'])"
+```
+
+Tests run the models on in-memory SQLite. `tests/test_migrations.py::test_upgrade_head_on_real_postgres` runs the migration against a throwaway Postgres container and is skipped when Docker is not installed.
+
+Comparison (`vocal_coach/storage/comparison.py`) follows `config.yaml → comparison`: per metric path, `delta = last − first`, step deltas, arrow `↑ ↓ →`, verdict `improved / worsened / neutral / unchanged / unavailable`. `unchanged` means the change is below `min_meaningful_change_pct` of the first value. A metric missing in any recording yields `unavailable`, never an error. Analyses with different `config_hash` are still compared, with `config_mismatch: true`.
