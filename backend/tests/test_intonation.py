@@ -41,3 +41,12 @@ def test_per_phrase_serialises_class_key(cfg):
     blk = intonation.compute(_tracks(x, cfg), cfg.analysis, [_phrase(0.0, 2.0)])
     dumped = blk.model_dump(by_alias=True)
     assert dumped["per_phrase"][0]["class"] == "flat"
+
+
+def test_phrase_shorter_than_tail_is_unclassified(cfg):
+    x = synth.tone(120, 2.0)
+    phrases = [_phrase(0.0, 1.6), _phrase(1.6, 1.63)]
+    blk = intonation.compute(_tracks(x, cfg), cfg.analysis, phrases)
+    assert blk.unclassified_count == 1
+    assert len(blk.per_phrase) == 1
+    assert blk.per_phrase[0].end_s == 1.6

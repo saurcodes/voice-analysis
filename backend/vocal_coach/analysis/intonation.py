@@ -33,6 +33,9 @@ def compute(tracks: Tracks, cfg: AnalysisConfig, phrases: list[Interval]) -> Int
     per_phrase: list[PhraseContour] = []
     unclassified = 0
     for ph in phrases:
+        if ph.duration_s < cfg.intonation_tail_s:
+            unclassified += 1
+            continue
         whole = tracks.f0_between(ph.start_s, ph.end_s)
         tail = tracks.f0_between(ph.end_s - cfg.intonation_tail_s, ph.end_s)
         if len(whole) == 0 or len(tail) == 0:
