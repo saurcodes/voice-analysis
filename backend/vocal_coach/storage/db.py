@@ -10,6 +10,8 @@ from vocal_coach.storage.models import Base
 
 def make_engine(url: str) -> Engine:
     if url.startswith("sqlite"):
+        # check_same_thread=False is needed because the StaticPool-backed :memory: fixture
+        # hands the same connection across threads in tests; harmless for file-based SQLite.
         kwargs = {"connect_args": {"check_same_thread": False}}
         if ":memory:" in url:
             kwargs["poolclass"] = StaticPool

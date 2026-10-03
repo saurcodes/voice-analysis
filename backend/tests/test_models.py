@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import inspect
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, StatementError
 
 from vocal_coach.storage.db import create_all, make_engine, make_session_factory
 from vocal_coach.storage.models import Analysis, Job, User, utcnow
@@ -47,12 +47,26 @@ def _analysis(user, sha="a" * 64, cfg="sha256:c1"):
 def test_round_trip_json_and_uuid(session):
     u = _user(session)
     a = _analysis(u)
+    original_recorded_at = a.recorded_at
     session.add(a)
     session.commit()
+    session.expire_all()
     loaded = session.get(Analysis, a.id)
     assert isinstance(loaded.id, uuid.UUID)
     assert loaded.metrics_json["pitch"]["f0_median_hz"] == 120.0
     assert loaded.transcript_json is None
+    assert loaded.recorded_at.tzinfo is not None
+    assert loaded.recorded_at == original_recorded_at
+
+
+def test_naive_datetime_rejected(session):
+    u = _user(session)
+    a = _analysis(u)
+    a.recorded_at = datetime(2026, 1, 1)
+    session.add(a)
+    with pytest.raises((ValueError, StatementError)):
+        session.commit()
+    session.rollback()
 
 
 def test_unique_user_sha_config_enforced_by_schema(session):
@@ -83,4 +97,6 @@ def test_job_status_check_constraint(session):
     j = Job(user_id=u.id, status="queued", stage="download", progress_pct=0)
     session.add(j)
     session.commit()
+    session.expire_all()
     assert isinstance(j.created_at, datetime)
+    assert j.created_at.tzinfo is not None

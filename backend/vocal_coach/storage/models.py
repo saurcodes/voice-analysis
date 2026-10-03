@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    CheckConstraint, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, Uuid,
+    CheckConstraint, DateTime, ForeignKey, Integer, LargeBinary, String, Text, TypeDecorator, UniqueConstraint, Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -19,6 +19,24 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class TZDateTime(TypeDecorator):
+    """Timezone-aware UTC datetimes on every backend. SQLite drops tzinfo on load; Postgres keeps it."""
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("naive datetime not allowed; pass an aware UTC datetime")
+        return value.astimezone(timezone.utc)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -30,7 +48,7 @@ class User(Base):
     keycloak_sub: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     email: Mapped[str | None] = mapped_column(Text)
     username: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, nullable=False)
 
 
 class DriveConnection(Base):
@@ -39,7 +57,7 @@ class DriveConnection(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     encrypted_refresh_token: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     google_email: Mapped[str | None] = mapped_column(Text)
-    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    connected_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, nullable=False)
 
 
 class Analysis(Base):
@@ -51,8 +69,8 @@ class Analysis(Base):
     file_name: Mapped[str] = mapped_column(Text, nullable=False)
     drive_file_id: Mapped[str | None] = mapped_column(Text)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    analysed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    analysed_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, nullable=False)
     analyser_version: Mapped[str] = mapped_column(Text, nullable=False)
     config_hash: Mapped[str] = mapped_column(Text, nullable=False)
     metrics_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
@@ -73,5 +91,5 @@ class Job(Base):
     progress_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[str | None] = mapped_column(Text)
     analysis_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("analyses.id", ondelete="SET NULL"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, onupdate=utcnow, nullable=False)
