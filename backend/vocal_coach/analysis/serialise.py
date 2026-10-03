@@ -10,6 +10,10 @@ from pydantic import BaseModel
 SIX_DECIMAL_FIELDS = frozenset({
     "voiced_fraction", "creak_fraction_below_100hz", "jitter_local", "shimmer_local",
     "modulation_depth", "weak_peak_fraction",
+    # transcript.json ratio fields
+    "probability", "avg_logprob", "no_speech_prob",
+    "low_conf_word_fraction", "word_final_drop_fraction", "rushed_word_fraction",
+    "low_logprob_segment_fraction",
 })
 DEFAULT_DECIMALS = 4
 RATIO_DECIMALS = 6

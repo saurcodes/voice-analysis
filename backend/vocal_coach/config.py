@@ -47,9 +47,33 @@ class ArticulationConfig(BaseModel):
     formant_trim_pct: float
 
 
+class TranscriptionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_size: str
+    compute_type: str
+    beam_size: int
+    language: str | None
+    fillers: list[str]
+
+
+class ClarityConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    low_conf_word_prob: float
+    word_final_drop_db: float
+    word_final_tail_fraction: float
+    min_word_duration_s: float
+    rushed_syl_per_sec: float
+    rushed_run_min_words: int
+    low_logprob_segment: float
+
+
 class AppConfig(BaseModel):
     analysis: AnalysisConfig
     articulation: ArticulationConfig
+    transcription: TranscriptionConfig
+    clarity: ClarityConfig
     raw: dict[str, Any]
     """The full YAML document, for sections validated by later plans."""
 
@@ -61,6 +85,8 @@ def load_config(path: Path | None = None) -> AppConfig:
     return AppConfig(
         analysis=AnalysisConfig(**raw["analysis"]),
         articulation=ArticulationConfig(**raw["articulation"]),
+        transcription=TranscriptionConfig(**raw["transcription"]),
+        clarity=ClarityConfig(**raw["clarity"]),
         raw=raw,
     )
 

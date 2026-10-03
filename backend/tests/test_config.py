@@ -36,3 +36,34 @@ def test_config_hash_ignores_non_analysis_sections():
     changed = src.model_copy(deep=True)
     changed.raw["llm"]["seed"] = 7
     assert config_hash(src) == config_hash(changed)
+
+
+def test_transcription_and_clarity_sections_load():
+    cfg = load_config()
+    assert cfg.transcription.model_size == "small"
+    assert cfg.transcription.compute_type == "int8"
+    assert cfg.transcription.beam_size == 5
+    assert cfg.transcription.language == "en"
+    assert cfg.transcription.fillers == ["um", "uh", "like", "basically", "actually", "you know", "so"]
+    assert cfg.clarity.low_conf_word_prob == 0.5
+    assert cfg.clarity.word_final_drop_db == 6
+    assert cfg.clarity.word_final_tail_fraction == 0.3
+    assert cfg.clarity.min_word_duration_s == 0.25
+    assert cfg.clarity.rushed_syl_per_sec == 7
+    assert cfg.clarity.rushed_run_min_words == 3
+    assert cfg.clarity.low_logprob_segment == -1.0
+
+
+def test_config_hash_ignores_transcription_and_clarity():
+    src = load_config()
+    changed = src.model_copy(deep=True)
+    changed.transcription.beam_size = 1
+    changed.clarity.rushed_syl_per_sec = 99
+    assert config_hash(src) == config_hash(changed)
+
+
+def test_six_decimal_fields_include_transcript_ratios():
+    from vocal_coach.analysis.serialise import SIX_DECIMAL_FIELDS
+    for name in ("probability", "avg_logprob", "no_speech_prob", "low_conf_word_fraction",
+                 "word_final_drop_fraction", "rushed_word_fraction", "low_logprob_segment_fraction"):
+        assert name in SIX_DECIMAL_FIELDS
