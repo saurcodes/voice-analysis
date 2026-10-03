@@ -1,7 +1,8 @@
 from vocal_coach.settings import Settings, get_settings
 
 
-def test_default_database_url_is_postgres():
+def test_default_database_url_is_postgres(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     s = Settings(_env_file=None)
     assert s.database_url.startswith("postgresql+psycopg://")
 

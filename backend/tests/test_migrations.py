@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -49,6 +50,23 @@ def test_upgrade_head_is_idempotent(tmp_path: Path):
     url = f"sqlite+pysqlite:///{tmp_path / 'm.db'}"
     upgrade_to_head(url)
     upgrade_to_head(url)  # second run is a no-op, must not raise
+
+
+def test_upgrade_head_does_not_disable_app_loggers(tmp_path: Path):
+    probe = logging.getLogger("vocal_coach.test_probe")
+    root_level = logging.getLogger().level
+    upgrade_to_head(f"sqlite+pysqlite:///{tmp_path / 'm.db'}")
+    assert probe.disabled is False
+    assert logging.getLogger().level == root_level
+
+
+def test_explicit_url_wins_over_database_url_env(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+pysqlite:///{tmp_path / 'bogus.db'}")
+    url = f"sqlite+pysqlite:///{tmp_path / 'm.db'}"
+    upgrade_to_head(url)
+    assert set(inspect(make_engine(url)).get_table_names()) == EXPECTED_TABLES
+    assert not (tmp_path / "bogus.db").exists()
+    assert os.environ["DATABASE_URL"].endswith("bogus.db")  # upgrade_to_head no longer touches the environment
 
 
 def test_upgrade_head_matches_models_metadata(tmp_path: Path):
