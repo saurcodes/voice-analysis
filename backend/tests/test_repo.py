@@ -33,10 +33,11 @@ def test_upsert_user_inserts_then_updates(session):
 
 def test_find_then_create_dedupes_same_file_same_config(session):
     u = repo.upsert_user(session, "sub-1", None, None)
-    assert repo.find_analysis(session, u.id, "a" * 64, "sha256:c1") is None
+    assert repo.find_analysis(session, u.id, "a" * 64, "sha256:c1", "0.1.0") is None
     a = _mk(session, u)
-    assert repo.find_analysis(session, u.id, "a" * 64, "sha256:c1").id == a.id
-    assert repo.find_analysis(session, u.id, "a" * 64, "sha256:c2") is None
+    assert repo.find_analysis(session, u.id, "a" * 64, "sha256:c1", "0.1.0").id == a.id
+    assert repo.find_analysis(session, u.id, "a" * 64, "sha256:c2", "0.1.0") is None
+    assert repo.find_analysis(session, u.id, "a" * 64, "sha256:c1", "0.2.0") is None
     with pytest.raises(IntegrityError):
         _mk(session, u)
     session.rollback()

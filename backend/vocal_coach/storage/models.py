@@ -5,14 +5,16 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    CheckConstraint, DateTime, ForeignKey, Integer, LargeBinary, String, Text, TypeDecorator, UniqueConstraint, Uuid,
+    CheckConstraint, DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text, TypeDecorator, UniqueConstraint, Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
 
 JOB_STATUSES = ("queued", "running", "done", "failed")
-JSONType = JSON().with_variant(JSONB(), "postgresql")
+# none_as_null: a Python None is stored as SQL NULL (not the JSON literal `null`), so
+# `IS NULL` filters and has_transcript/has_coaching projections mean what they say.
+JSONType = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
 
 
 def utcnow() -> datetime:
@@ -62,10 +64,14 @@ class DriveConnection(Base):
 
 class Analysis(Base):
     __tablename__ = "analyses"
-    __table_args__ = (UniqueConstraint("user_id", "content_sha256", "config_hash", name="uq_analyses_user_sha_config"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "content_sha256", "config_hash", "analyser_version",
+                         name="uq_analyses_user_sha_config_version"),
+        Index("ix_analyses_user_recorded", "user_id", "recorded_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     file_name: Mapped[str] = mapped_column(Text, nullable=False)
     drive_file_id: Mapped[str | None] = mapped_column(Text)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)

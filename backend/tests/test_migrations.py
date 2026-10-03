@@ -25,7 +25,15 @@ _SIGNIFICANT_DIFF_OPS = {
     "remove_constraint",
     "add_table",
     "remove_table",
+    "add_index",
+    "remove_index",
+    "modify_type",
 }
+
+
+def _diff_op(entry) -> str:
+    # Column-level modify_* entries come wrapped in a list of tuples; table-level ones are tuples.
+    return entry[0][0] if isinstance(entry, list) else entry[0]
 
 
 def test_upgrade_head_on_sqlite_creates_all_tables(tmp_path: Path):
@@ -33,7 +41,8 @@ def test_upgrade_head_on_sqlite_creates_all_tables(tmp_path: Path):
     upgrade_to_head(url)
     insp = inspect(make_engine(url))
     assert set(insp.get_table_names()) == EXPECTED_TABLES
-    assert ["user_id", "content_sha256", "config_hash"] in [u["column_names"] for u in insp.get_unique_constraints("analyses")]
+    assert ["user_id", "content_sha256", "config_hash", "analyser_version"] in [
+        u["column_names"] for u in insp.get_unique_constraints("analyses")]
 
 
 def test_upgrade_head_is_idempotent(tmp_path: Path):
@@ -55,7 +64,10 @@ def test_upgrade_head_matches_models_metadata(tmp_path: Path):
             diff = compare_metadata(ctx, Base.metadata)
     finally:
         engine.dispose()
-    significant = [d for d in diff if d[0] in _SIGNIFICANT_DIFF_OPS]
+    significant = [d for d in diff if _diff_op(d) in _SIGNIFICANT_DIFF_OPS]
+    excluded = [d for d in diff if _diff_op(d) not in _SIGNIFICANT_DIFF_OPS]
+    if excluded:
+        print(f"compare_metadata entries excluded as non-significant: {excluded}")
     assert significant == [], f"models/migration drift: {significant}"
 
 

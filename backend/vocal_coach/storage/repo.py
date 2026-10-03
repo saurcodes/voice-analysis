@@ -27,10 +27,12 @@ def upsert_user(session: Session, keycloak_sub: str, email: str | None, username
     return user
 
 
-def find_analysis(session: Session, user_id: uuid.UUID, content_sha256: str, config_hash: str) -> Analysis | None:
+def find_analysis(
+    session: Session, user_id: uuid.UUID, content_sha256: str, config_hash: str, analyser_version: str,
+) -> Analysis | None:
     return session.scalar(
         select(Analysis).where(Analysis.user_id == user_id, Analysis.content_sha256 == content_sha256,
-                               Analysis.config_hash == config_hash)
+                               Analysis.config_hash == config_hash, Analysis.analyser_version == analyser_version)
     )
 
 

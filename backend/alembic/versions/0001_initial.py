@@ -15,7 +15,7 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
-JSONType = sa.JSON().with_variant(JSONB(), "postgresql")
+JSONType = sa.JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
 
 
 def upgrade() -> None:
@@ -37,7 +37,7 @@ def upgrade() -> None:
     op.create_table(
         "analyses",
         sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
         sa.Column("file_name", sa.Text(), nullable=False),
         sa.Column("drive_file_id", sa.Text()),
         sa.Column("content_sha256", sa.String(64), nullable=False),
@@ -50,8 +50,10 @@ def upgrade() -> None:
         sa.Column("speaker_context", sa.Text()),
         sa.Column("coaching_json", JSONType),
         sa.Column("coaching_warnings", JSONType),
-        sa.UniqueConstraint("user_id", "content_sha256", "config_hash", name="uq_analyses_user_sha_config"),
+        sa.UniqueConstraint("user_id", "content_sha256", "config_hash", "analyser_version",
+                            name="uq_analyses_user_sha_config_version"),
     )
+    op.create_index("ix_analyses_user_recorded", "analyses", ["user_id", "recorded_at"])
     op.create_table(
         "jobs",
         sa.Column("id", sa.Uuid(), primary_key=True),
@@ -69,6 +71,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("jobs")
+    op.drop_index("ix_analyses_user_recorded", table_name="analyses")
     op.drop_table("analyses")
     op.drop_table("drive_connections")
     op.drop_table("users")
