@@ -1,6 +1,7 @@
 """Direction-aware comparison across a user's analyses (spec §9). Pure; no database access."""
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Any, Literal
 
@@ -55,7 +56,10 @@ class ComparisonResult(BaseModel):
 def _numeric(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    value_float = float(value)
+    if not math.isfinite(value_float):
+        return None
+    return value_float
 
 
 def resolve_path(analysis: ComparableAnalysis, path: str) -> float | None:

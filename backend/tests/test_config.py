@@ -98,3 +98,10 @@ def test_config_hash_ignores_comparison():
     changed = src.model_copy(deep=True)
     changed.comparison.min_meaningful_change_pct = 50
     assert config_hash(src) == config_hash(changed)
+
+
+def test_comparison_min_meaningful_change_pct_must_be_positive():
+    import pytest
+    from vocal_coach.config import ComparisonConfig
+    with pytest.raises(ValueError):
+        ComparisonConfig(min_meaningful_change_pct=0, directions={})

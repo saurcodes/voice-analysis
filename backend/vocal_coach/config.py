@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
 
@@ -83,7 +83,7 @@ Direction = Literal["up_good", "down_good", "neutral"]
 class ComparisonConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    min_meaningful_change_pct: float
+    min_meaningful_change_pct: float = Field(gt=0)
     directions: dict[str, Direction]
 
 

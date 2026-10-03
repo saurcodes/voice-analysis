@@ -100,3 +100,19 @@ def test_three_recordings_steps_and_trend():
 def test_requires_two_analyses():
     with pytest.raises(ValueError):
         compare([_a(1, _m())], CFG)
+
+
+def test_nan_and_inf_are_unavailable():
+    nan_result = compare([
+        _a(1, {"pitch": {"f0_range_st": float("nan")}}),
+        _a(2, {"pitch": {"f0_range_st": 10.0}}, day=1)
+    ], CFG)
+    nan_row = next(x for x in nan_result.rows if x.path == "pitch.f0_range_st")
+    assert nan_row.verdict == "unavailable" and nan_row.arrow == "—" and nan_row.delta is None
+
+    inf_result = compare([
+        _a(1, {"pitch": {"f0_range_st": 10.0}}),
+        _a(2, {"pitch": {"f0_range_st": float("inf")}}, day=1)
+    ], CFG)
+    inf_row = next(x for x in inf_result.rows if x.path == "pitch.f0_range_st")
+    assert inf_row.verdict == "unavailable" and inf_row.arrow == "—" and inf_row.delta is None
