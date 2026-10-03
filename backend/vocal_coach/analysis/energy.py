@@ -45,6 +45,8 @@ def compute(tracks: Tracks, cfg: AnalysisConfig, phrases: list[Interval]) -> Ene
 
     drops: list[float] = []
     for ph in phrases:
+        if ph.duration_s < cfg.phrase_end_tail_s:
+            continue
         whole = tracks.intensity_between(ph.start_s, ph.end_s)
         tail = tracks.intensity_between(ph.end_s - cfg.phrase_end_tail_s, ph.end_s)
         if len(whole) == 0 or len(tail) == 0:

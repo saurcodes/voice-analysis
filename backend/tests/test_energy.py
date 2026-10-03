@@ -46,3 +46,12 @@ def test_no_phrases(cfg):
     assert blk.final_vs_body_db is None
     assert blk.trailing_off_count == 0
     assert blk.per_phrase_end_drop_db == []
+
+
+def test_phrase_shorter_than_tail_is_skipped(cfg):
+    # 0.2 s phrase (< phrase_end_tail_s 0.3) after 1 s of silence: tail window would
+    # otherwise reach into the silence and fake a trailing-off drop.
+    x = synth.concat(synth.tone(120, 2.0), synth.silence(1.0), synth.tone(120, 0.2))
+    blk = energy.compute(_tracks(x, cfg), cfg.analysis, [_phrase(0.0, 2.0), _phrase(3.0, 3.2)])
+    assert len(blk.per_phrase_end_drop_db) == 1
+    assert blk.trailing_off_count == 0
