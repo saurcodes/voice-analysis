@@ -34,3 +34,8 @@ def test_rates():
     assert abs(words_per_min(120, 60.0) - 120.0) < 1e-9
     assert words_per_min(5, 0.0) == 0.0
     assert abs(per_min(3, 30.0) - 6.0) < 1e-9
+
+
+def test_empty_filler_entry_never_matches_and_does_not_hang():
+    words = _words("a", "b")
+    assert count_fillers(words, ["", "   ", "a"]) == {"": 0, "   ": 0, "a": 1}

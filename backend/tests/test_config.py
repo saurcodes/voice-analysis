@@ -67,3 +67,10 @@ def test_six_decimal_fields_include_transcript_ratios():
     for name in ("probability", "avg_logprob", "no_speech_prob", "low_conf_word_fraction",
                  "word_final_drop_fraction", "rushed_word_fraction", "low_logprob_segment_fraction"):
         assert name in SIX_DECIMAL_FIELDS
+
+
+def test_empty_filler_rejected_at_load():
+    import pytest
+    from vocal_coach.config import TranscriptionConfig
+    with pytest.raises(ValueError):
+        TranscriptionConfig(model_size="small", compute_type="int8", beam_size=5, language="en", fillers=["um", " "])

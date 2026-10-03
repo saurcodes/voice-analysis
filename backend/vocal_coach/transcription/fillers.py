@@ -4,7 +4,7 @@ from __future__ import annotations
 from vocal_coach.transcription.schema import TranscriptWord
 from vocal_coach.transcription.syllables import normalise_token
 
-SECONDS_PER_MINUTE = 60.0
+SECONDS_PER_MINUTE = 60.0  # unit conversion for per-minute rates
 
 
 def per_min(count: int, duration_s: float) -> float:
@@ -19,8 +19,13 @@ def count_fillers(words: list[TranscriptWord], fillers: list[str]) -> dict[str, 
     tokens = [normalise_token(w.word) for w in words]
     tokens = [t for t in tokens if t]
     patterns = [tuple(normalise_token(p) for p in f.split()) for f in fillers]
-    # Longest patterns first so "you know" wins over "you".
-    order = sorted(range(len(fillers)), key=lambda i: -len(patterns[i]))
+    # Skip empty patterns: if a filler splits to no tokens or normalises to empty, its pattern
+    # will be () which always matches, causing an infinite loop. Such entries are kept in counts
+    # (value 0) but never matched against; validation in config.py prevents this at load time.
+    order = sorted(
+        (i for i in range(len(fillers)) if patterns[i]),
+        key=lambda i: -len(patterns[i])
+    )
     counts = {f: 0 for f in fillers}
     i = 0
     while i < len(tokens):

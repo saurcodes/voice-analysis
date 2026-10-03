@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
 
@@ -55,6 +55,13 @@ class TranscriptionConfig(BaseModel):
     beam_size: int
     language: str | None
     fillers: list[str]
+
+    @field_validator("fillers")
+    @classmethod
+    def validate_fillers(cls, v: list[str]) -> list[str]:
+        if any(not f.strip() for f in v):
+            raise ValueError("fillers must be non-empty, non-whitespace strings")
+        return v
 
 
 class ClarityConfig(BaseModel):
