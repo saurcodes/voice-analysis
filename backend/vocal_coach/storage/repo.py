@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from pydantic import BaseModel
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -20,6 +21,8 @@ TERMINAL_STATUSES = ("done", "failed")  # a finished job's status never changes 
 PROGRESS_MIN = 0  # progress_pct is a percentage: 0 … 100 inclusive
 PROGRESS_MAX = 100
 FIRST_JOB_STAGE = "download"  # first pipeline stage (spec §10)
+SUMMARY_PAGE_SIZE = 50  # default page for GET /analyses summaries
+SUMMARY_FIRST_OFFSET = 0
 
 
 def _commit(session: Session) -> None:
@@ -88,6 +91,63 @@ def create_analysis(
 
 def list_analyses(session: Session, user_id: uuid.UUID) -> list[Analysis]:
     return list(session.scalars(select(Analysis).where(Analysis.user_id == user_id).order_by(Analysis.recorded_at.desc(), Analysis.id.desc())))
+
+
+class AnalysisSummary(BaseModel):
+    """One analyses-list row: scalar columns plus a few headline metrics, without the JSON blobs."""
+    id: uuid.UUID
+    file_name: str
+    drive_file_id: str | None
+    recorded_at: datetime
+    analysed_at: datetime
+    analyser_version: str
+    config_hash: str
+    has_transcript: bool
+    has_coaching: bool
+    f0_median_hz: float | None
+    f0_range_st: float | None
+    flat_pct: float | None
+    pauses_per_min: float | None
+    articulation_rate_syl_per_sec: float | None
+    trailing_off_count: int | None
+    fillers_per_min: float | None
+
+
+# Tuple paths compile to a single JSON_EXTRACT(col, '$."a"."b"') on SQLite (JSON1) and
+# `col #>> '{a,b}'` on Postgres JSONB, then CAST to the numeric type; missing keys and JSON null give NULL.
+_SUMMARY_COLUMNS = (
+    Analysis.id, Analysis.file_name, Analysis.drive_file_id, Analysis.recorded_at, Analysis.analysed_at,
+    Analysis.analyser_version, Analysis.config_hash,
+    Analysis.transcript_json.is_not(None).label("has_transcript"),
+    Analysis.coaching_json.is_not(None).label("has_coaching"),
+    Analysis.metrics_json[("pitch", "f0_median_hz")].as_float().label("f0_median_hz"),
+    Analysis.metrics_json[("pitch", "f0_range_st")].as_float().label("f0_range_st"),
+    Analysis.metrics_json[("intonation", "flat_pct")].as_float().label("flat_pct"),
+    Analysis.metrics_json[("phrasing", "pauses_per_min")].as_float().label("pauses_per_min"),
+    Analysis.metrics_json[("pace", "articulation_rate_syl_per_sec")].as_float().label("articulation_rate_syl_per_sec"),
+    Analysis.metrics_json[("energy", "trailing_off_count")].as_integer().label("trailing_off_count"),
+    Analysis.transcript_json[("derived", "fillers_per_min")].as_float().label("fillers_per_min"),
+)
+
+
+def list_analysis_summaries(
+    session: Session, user_id: uuid.UUID, *, limit: int = SUMMARY_PAGE_SIZE, offset: int = SUMMARY_FIRST_OFFSET,
+) -> list[AnalysisSummary]:
+    """Newest first, paginated, one query; never loads metrics/transcript/coaching blobs."""
+    stmt = (select(*_SUMMARY_COLUMNS).where(Analysis.user_id == user_id)
+            .order_by(Analysis.recorded_at.desc(), Analysis.id.desc()).limit(limit).offset(offset))
+    return [AnalysisSummary.model_validate(row._mapping) for row in session.execute(stmt)]
+
+
+def get_analyses(session: Session, user_id: uuid.UUID, ids: list[uuid.UUID]) -> list[Analysis]:
+    """The user's analyses among `ids` (foreign or unknown ids dropped, duplicates collapsed), oldest first."""
+    unique_ids = list(dict.fromkeys(ids))
+    if not unique_ids:
+        return []
+    return list(session.scalars(
+        select(Analysis).where(Analysis.user_id == user_id, Analysis.id.in_(unique_ids))
+        .order_by(Analysis.recorded_at, Analysis.id)
+    ))
 
 
 def get_analysis(session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID) -> Analysis | None:

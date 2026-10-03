@@ -1,3 +1,4 @@
+import re
 import uuid
 
 import pytest
@@ -219,3 +220,90 @@ def test_writer_failure_rolls_back_session(session, monkeypatch):
     monkeypatch.undo()
     assert not session.dirty
     assert repo.get_job(session, u.id, j.id).stage == "download"
+
+
+_FULL_METRICS = {
+    "pitch": {"f0_median_hz": 118.5, "f0_range_st": 9.25},
+    "intonation": {"flat_pct": 31.0},
+    "phrasing": {"pauses_per_min": 12.5},
+    "pace": {"articulation_rate_syl_per_sec": 4.75},
+    "energy": {"trailing_off_count": 3},
+}
+
+
+def _mk_full(session, user, sha, when, metrics=None, transcript=None):
+    return repo.create_analysis(
+        session, user.id, file_name=f"{sha[0]}.m4a", drive_file_id="drv", content_sha256=sha, recorded_at=when,
+        analyser_version="0.1.0", config_hash="sha256:c1", metrics_json=metrics or _FULL_METRICS,
+        transcript_json=transcript,
+    )
+
+
+def test_analysis_summaries_project_key_metrics_and_flags(session):
+    from datetime import timedelta
+    u = repo.upsert_user(session, "a", None, None)
+    t0 = utcnow()
+    with_all = _mk_full(session, u, "1" * 64, t0, transcript={"derived": {"fillers_per_min": 2.5}})
+    repo.set_coaching(session, u.id, with_all.id, speaker_context=None, coaching_json={"k": 1}, coaching_warnings=[])
+    bare = _mk_full(session, u, "2" * 64, t0 - timedelta(days=1),
+                    metrics={"pitch": {"f0_median_hz": None}, "energy": {}})
+    summaries = repo.list_analysis_summaries(session, u.id)
+    assert all(isinstance(x, repo.AnalysisSummary) for x in summaries)
+    assert [x.id for x in summaries] == [with_all.id, bare.id]
+    full, empty = summaries
+    assert (full.f0_median_hz, full.f0_range_st, full.flat_pct, full.pauses_per_min,
+            full.articulation_rate_syl_per_sec, full.trailing_off_count, full.fillers_per_min) == (
+        118.5, 9.25, 31.0, 12.5, 4.75, 3, 2.5)
+    assert full.has_transcript is True and full.has_coaching is True
+    assert (full.file_name, full.drive_file_id, full.analyser_version, full.config_hash) == (
+        "1.m4a", "drv", "0.1.0", "sha256:c1")
+    assert full.recorded_at == with_all.recorded_at and full.recorded_at.tzinfo is not None
+    assert full.analysed_at.tzinfo is not None
+    assert empty.has_transcript is False and empty.has_coaching is False
+    assert (empty.f0_median_hz, empty.f0_range_st, empty.trailing_off_count, empty.fillers_per_min) == (
+        None, None, None, None)
+
+
+def test_analysis_summaries_paginate_and_are_user_scoped(session):
+    from datetime import timedelta
+    u = repo.upsert_user(session, "a", None, None)
+    other = repo.upsert_user(session, "b", None, None)
+    t0 = utcnow()
+    rows = [_mk_full(session, u, str(i) * 64, t0 - timedelta(days=i)) for i in range(5)]
+    _mk_full(session, other, "f" * 64, t0 + timedelta(days=1))
+    assert [x.id for x in repo.list_analysis_summaries(session, u.id)] == [r.id for r in rows]
+    assert [x.id for x in repo.list_analysis_summaries(session, u.id, limit=2)] == [r.id for r in rows[:2]]
+    assert [x.id for x in repo.list_analysis_summaries(session, u.id, limit=2, offset=2)] == [r.id for r in rows[2:4]]
+    assert repo.list_analysis_summaries(session, u.id, limit=2, offset=10) == []
+
+
+def test_analysis_summaries_do_not_load_blobs(session):
+    from sqlalchemy import event
+    u = repo.upsert_user(session, "a", None, None)
+    _mk_full(session, u, "1" * 64, utcnow())
+    statements = []
+    engine = session.get_bind()
+    listener = lambda conn, cursor, stmt, params, ctx, many: statements.append(stmt)  # noqa: E731
+    event.listen(engine, "before_cursor_execute", listener)
+    try:
+        repo.list_analysis_summaries(session, u.id)
+    finally:
+        event.remove(engine, "before_cursor_execute", listener)
+    assert len(statements) == 1
+    select_list = statements[0].split(" FROM ")[0]
+    # Blob columns may appear only inside a JSON path extraction or an IS NOT NULL flag, never bare.
+    bare = re.findall(r"(?<!JSON_EXTRACT\()analyses\.(?:metrics|transcript|coaching)_json(?! IS NOT NULL)", select_list)
+    assert bare == [], select_list
+
+
+def test_get_analyses_is_scoped_deduped_and_ordered(session):
+    from datetime import timedelta
+    u = repo.upsert_user(session, "a", None, None)
+    other = repo.upsert_user(session, "b", None, None)
+    t0 = utcnow()
+    late = _mk(session, u, sha="1" * 64, when=t0)
+    early = _mk(session, u, sha="2" * 64, when=t0 - timedelta(days=1))
+    foreign = _mk(session, other, sha="3" * 64, when=t0)
+    got = repo.get_analyses(session, u.id, [late.id, early.id, late.id, foreign.id, uuid.uuid4()])
+    assert [a.id for a in got] == [early.id, late.id]
+    assert repo.get_analyses(session, u.id, []) == []
