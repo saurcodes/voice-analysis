@@ -88,7 +88,7 @@ class Job(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     stage: Mapped[str] = mapped_column(Text, nullable=False)
-    progress_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    progress_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     error: Mapped[str | None] = mapped_column(Text)
     analysis_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("analyses.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, nullable=False)
