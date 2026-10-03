@@ -17,6 +17,7 @@ def words_per_min(word_count: int, duration_s: float) -> float:
 
 def count_fillers(words: list[TranscriptWord], fillers: list[str]) -> dict[str, int]:
     tokens = [normalise_token(w.word) for w in words]
+    # punctuation-only tokens are dropped so a multi-word filler still matches across them (`you — know`)
     tokens = [t for t in tokens if t]
     patterns = [tuple(normalise_token(p) for p in f.split()) for f in fillers]
     # Skip empty patterns: if a filler splits to no tokens or normalises to empty, its pattern

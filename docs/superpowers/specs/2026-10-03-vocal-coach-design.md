@@ -314,7 +314,7 @@ Serialisation: floats rounded to 4 decimals (Hz, dB, s, st) or 6 decimals (ratio
 
 ## 7. Transcription
 
-- `transcriber.py`: faster-whisper. `model_size` (default `small`), `compute_type` (default `int8`), `beam_size` 5, `temperature 0`, `word_timestamps true`, `language` (default `en`). Model loaded once per process behind a lock. Returns segments (`avg_logprob`, `no_speech_prob`) and words (`probability`).
+- `transcriber.py`: faster-whisper on the decoded 16 kHz samples (not the file path), `temperature 0`, `beam_size` from config, `word_timestamps true`, `vad_filter false`, `condition_on_previous_text false`; model loaded once per process behind a lock. `model_size` (default `small`), `compute_type` (default `int8`), `language` (default `en`). Returns segments (`avg_logprob`, `no_speech_prob`) and words (`probability`). Words from segments with `no_speech_prob > transcription.no_speech_exclude_prob` (default 0.6) stay in `segments`/`words` but are excluded from `derived`.
 - `fillers.py`: filler list from config, case-insensitive on normalised tokens; multi-word fillers matched on adjacent words. `words_per_min` = words ÷ total minutes.
 - `syllables.py`: deterministic English vowel-cluster syllable estimate, no external dictionary.
 - `clarity.py`: takes words + WAV + config.
@@ -325,6 +325,7 @@ transcription:
   compute_type: int8
   beam_size: 5
   language: en
+  no_speech_exclude_prob: 0.6
   fillers: [um, uh, like, basically, actually, "you know", so]
 clarity:
   low_conf_word_prob: 0.5

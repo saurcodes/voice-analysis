@@ -47,6 +47,8 @@ Tests use synthetic audio only. ffmpeg-dependent tests are skipped if ffmpeg is 
 
 `transcript.json` = faster-whisper (CPU, `int8`, model size from `config.yaml → transcription.model_size`, beam 5, temperature 0, word timestamps) + filler counts + clarity proxies (low-confidence, half-eaten and rushed words). It is kept separate from `metrics.json` because whisper output is only deterministic for a fixed build and hardware.
 
+With `transcription.language` set, whisper is forced to that language and `transcript.language` echoes the setting; set it to `null` to auto-detect. Whisper can invent words in silent stretches; any segment whose `no_speech_prob` exceeds `transcription.no_speech_exclude_prob` (default 0.6) is kept in `segments`/`words` but left out of every `derived` number.
+
 ```bash
 python -m vocal_coach.transcription.run data/work/recording.wav --out data/transcript.json
 ```
@@ -55,4 +57,4 @@ The first run downloads the model (~460 MB for `small`) into the Hugging Face ca
 
 ### Pinned dependencies — what bumps `ANALYSER_VERSION`
 
-Only changes to packages that affect `metrics.json` numbers (praat-parselmouth, numpy, scipy, and the ffmpeg binary) require an `ANALYSER_VERSION` bump. Transcription packages (faster-whisper, ctranslate2, tokenizers) are recorded in `transcript.json → model` and do not touch `metrics.json`.
+Only changes to packages that affect `metrics.json` numbers (praat-parselmouth, numpy, scipy, and the ffmpeg binary) require an `ANALYSER_VERSION` bump. Transcription packages (faster-whisper, ctranslate2, tokenizers) do not touch `metrics.json`; `transcript.json → model` records the model size only; package versions live in `requirements.lock`.
