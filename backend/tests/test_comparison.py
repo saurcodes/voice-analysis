@@ -15,9 +15,9 @@ CFG = ComparisonConfig(min_meaningful_change_pct=5, directions={
 })
 
 
-def _a(i, metrics, transcript=None, cfg="sha256:c1", day=0):
+def _a(i, metrics, transcript=None, cfg="sha256:c1", day=0, version="0.1.0"):
     return ComparableAnalysis(id=f"a{i}", recorded_at=T0 + timedelta(days=day), config_hash=cfg,
-                              metrics=metrics, transcript=transcript)
+                              analyser_version=version, metrics=metrics, transcript=transcript)
 
 
 def _m(f0_range=10.0, long_pauses=4, ppm=12.0, area=900000.0):
@@ -73,7 +73,8 @@ def test_missing_metric_is_unavailable_not_error():
     r = compare([_a(1, _m(), None), _a(2, _m(), _t(2.0), day=1)], CFG)
     row = next(x for x in r.rows if x.path == "transcript.derived.fillers_per_min")
     assert row.values == [None, 2.0] and row.delta is None and row.step_deltas == [None]
-    assert row.verdict == "unavailable" and row.arrow == "—"
+    assert row.verdict == "unavailable" and row.arrow == "—"  # only one non-None value
+    assert row.partial is True
     assert next(x for x in r.rows if x.path == "pitch.f0_range_st").verdict == "unchanged"
 
 
@@ -116,3 +117,48 @@ def test_nan_and_inf_are_unavailable():
     ], CFG)
     inf_row = next(x for x in inf_result.rows if x.path == "pitch.f0_range_st")
     assert inf_row.verdict == "unavailable" and inf_row.arrow == "—" and inf_row.delta is None
+
+
+def _f0(*values):
+    return [_a(i, {"pitch": {"f0_range_st": v}}, day=i) for i, v in enumerate(values)]
+
+
+def _f0_row(result):
+    return next(x for x in result.rows if x.path == "pitch.f0_range_st")
+
+
+def test_partial_series_uses_first_and_last_available_values():
+    row = _f0_row(compare(_f0(None, 2.0, 3.0), CFG))
+    assert row.values == [None, 2.0, 3.0] and row.step_deltas == [None, 1.0]
+    assert row.delta == 1.0 and row.partial is True
+    assert row.verdict == "improved" and row.arrow == "↑"
+    gap = _f0_row(compare(_f0(2.0, None, 3.0), CFG))
+    assert gap.delta == 1.0 and gap.partial is True and gap.step_deltas == [None, None]
+
+
+def test_series_with_one_available_value_is_unavailable_and_partial():
+    row = _f0_row(compare(_f0(None, None, 5.0), CFG))
+    assert row.verdict == "unavailable" and row.delta is None and row.partial is True and row.arrow == "—"
+
+
+def test_complete_series_is_not_partial():
+    assert _f0_row(compare(_f0(1.0, 2.0), CFG)).partial is False
+
+
+def test_same_recorded_at_ties_break_by_id():
+    b = ComparableAnalysis(id="b", recorded_at=T0, config_hash="c", analyser_version="0.1.0", metrics={}, transcript=None)
+    a = ComparableAnalysis(id="a", recorded_at=T0, config_hash="c", analyser_version="0.1.0", metrics={}, transcript=None)
+    assert compare([b, a], CFG).analysis_ids == ["a", "b"]
+    assert compare([a, b], CFG).analysis_ids == ["a", "b"]
+
+
+def test_analyser_version_mismatch_flag():
+    r = compare([_a(1, _m(), version="0.1.0"), _a(2, _m(), day=1, version="0.2.0")], CFG)
+    assert r.analyser_version_mismatch is True and r.config_mismatch is False
+    assert compare([_a(1, _m()), _a(2, _m(), day=1)], CFG).analyser_version_mismatch is False
+
+
+def test_naive_recorded_at_rejected():
+    with pytest.raises(ValueError):
+        ComparableAnalysis(id="x", recorded_at=datetime(2026, 10, 1), config_hash="c", analyser_version="0.1.0",
+                           metrics={}, transcript=None)
