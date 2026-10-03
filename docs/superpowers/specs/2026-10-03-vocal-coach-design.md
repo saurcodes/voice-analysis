@@ -212,6 +212,7 @@ analysis:
   low_confidence_noise_floor_db: 45
   low_confidence_snr_db: 15
   low_confidence_f0_hz: 250
+  min_duration_s: 2.0
 articulation:
   hf_band_hz: [2000, 8000]
   lf_band_hz: [0, 1000]
@@ -226,6 +227,7 @@ articulation:
 ### 6.3 Metrics
 
 **recording_quality** (in `analyser.py`) — `noise_floor_db` = p5 of intensity; `snr_estimate_db` = median speaking intensity − noise floor; `low_confidence` if noise floor > `low_confidence_noise_floor_db` or SNR < `low_confidence_snr_db`; `reasons[]` lists which fired.
+Intensity is clamped at 0 dB before any metric; Praat reports −300 dB for digital silence. A noise-gated recording therefore reports `noise_floor_db = 0.0`.
 
 **pitch.py** — Praat `To Pitch (ac)` with time step, floor, ceiling. Voiced frames only.
 - `f0_median_hz`, `f0_p10_hz`, `f0_p90_hz`, `f0_range_st = 12·log2(p90/p10)`
@@ -238,7 +240,7 @@ articulation:
 - `pause_count`, `pauses_per_min` (per minute of total duration), `mean_pause_length_s`
 - `long_pause_count_ge_1s`, `long_pauses[] {start_s, end_s, duration_s}`
 
-**pace.py** — Intensity contour (`To Intensity`, min pitch = floor). Peaks via `scipy.signal.find_peaks(prominence=syllable_peak_prominence_db)` restricted to voiced frames.
+**pace.py** — Intensity contour (`To Intensity`, min pitch = floor). Peaks via `scipy.signal.find_peaks(prominence=syllable_peak_prominence_db, wlen=0.4 s)` restricted to voiced frames; the 0.4 s window judges each syllable against its own neighbourhood, not distant silence.
 - `syllable_count_est`, `syllables_per_sec_overall` (÷ total duration), `articulation_rate_syl_per_sec` (÷ speaking time)
 
 **intonation.py** — Per phrase: median F0 of last `intonation_tail_s` vs phrase median, semitones. `up` > +threshold, `down` < −threshold, else `flat`. Phrases with no voiced tail → `unclassified_count`.
@@ -246,7 +248,8 @@ articulation:
 - `per_phrase[] {start_s, end_s, end_delta_st, class}`
 
 **energy.py** —
-- `body_median_db` = median speaking intensity excluding final `energy_window_s`; `final_15s_median_db`; `final_vs_body_db`
+- `final_15s_median_db` = median speaking intensity over the last `energy_window_s` seconds of speech, anchored at the end of the last phrase.
+- `body_median_db` = median speaking intensity before that final window; `final_vs_body_db` = final − body
 - `per_phrase_end_drop_db[]` = median of last `phrase_end_tail_s` − phrase median; `trailing_off_count` = drops < −`trailing_off_drop_db`
 
 **voice_quality.py** — `To Harmonicity (cc)`, `To PointProcess (periodic, cc)`, jitter (local), shimmer (local).
@@ -254,7 +257,7 @@ articulation:
 
 **articulation.py** — proxies for mumbling / vowel reduction. Speaking frames only.
 - `hf_energy_ratio_db` = median over frames of 10·log10(E[hf_band] / E[lf_band]), STFT 25 ms Hann, 10 ms hop
-- `spectral_tilt_db_per_oct` = slope of LTAS (`To Ltas`, 100 Hz bins) regressed on log2(f) over 500–8000 Hz
+- `spectral_tilt_db_per_oct` = (mean dB power in `hf_band_hz` − mean dB power in `lf_band_hz`) ÷ log2(midpoint(hf)/midpoint(lf)), Welch PSD over speaking samples. Partly redundant with `hf_energy_ratio_db`; kept as a per-octave normalised view.
 - `modulation_depth` = RMS of intensity contour band-passed to `modulation_band_hz` ÷ mean intensity (linear)
 - `syllable_peak_prominence_mean_db`, `syllable_peak_prominence_p25_db`, `weak_peak_fraction` (prominence < `weak_peak_prominence_db`)
 - `vowel_space`: `To Formant (burg)` (0.01 s, 5 formants, `formant_max_hz`), F1/F2 at voiced frames, trimmed to [p5, p95] per axis → `f1_sd_hz`, `f2_sd_hz`, `vowel_space_area_hz2` (convex hull), `vowel_dispersion_st` (mean semitone distance from centroid)
@@ -518,7 +521,7 @@ Dev mode: compose up `postgres keycloak` only; `uvicorn --reload` and `vite dev`
 - Invalid/expired JWT → 401; frontend triggers silent renew then re-login.
 - Drive not connected → `/drive/files` returns 409 `drive_not_connected`; UI shows connect prompt. Google token revoked → same, connection row deleted.
 - Upload too large / wrong type → 413 / 415.
-- Audio < 2 s or no voiced frames → `MetricsReport` with `recording_quality.reasons = ["no_voiced_speech"]`, pitch/intonation fields `null`; UI shows a warning instead of cards.
+- Audio shorter than `min_duration_s` → report with `recording_quality.reasons = ["too_short"]`, all metric fields null; no voiced frames → `["no_voiced_speech"]`. UI shows a warning instead of cards.
 - faster-whisper failure → `transcript_json = null`; clarity and filler metrics absent; coaching runs on metrics alone.
 - LLM failure → §11.3.
 - Job crash → `failed` with error; SSE `error` event; row visible in Library with retry.

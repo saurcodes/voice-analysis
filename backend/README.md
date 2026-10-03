@@ -38,3 +38,7 @@ Tests use synthetic audio only. ffmpeg-dependent tests are skipped if ffmpeg is 
 - All thresholds live in `config.yaml` under `analysis` and `articulation`; `config_hash` covers both.
 - Transcript-derived numbers are deliberately not part of `metrics.json` (see spec §2).
 - Floats are rounded at serialisation (4 decimals; ratios 6) and keys sorted.
+
+### Pinned dependencies
+
+`requirements.lock` is the exact environment the determinism guarantee was verified in. Any change to it (or to ffmpeg) must bump `ANALYSER_VERSION`.
