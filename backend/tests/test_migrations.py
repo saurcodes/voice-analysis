@@ -114,5 +114,56 @@ def test_upgrade_head_on_real_postgres():
             cols = {c["name"]: c["type"].__class__.__name__ for c in insp.get_columns("analyses")}
             assert cols["metrics_json"] == "JSONB"
             assert cols["id"] == "UUID"
+            _postgres_repo_round_trip(engine)
+            with engine.connect() as conn:
+                ctx = MigrationContext.configure(conn, opts={"compare_type": True, "compare_server_default": True})
+                diff = compare_metadata(ctx, Base.metadata)
+            assert diff == [], f"models/migration drift on Postgres: {diff}"
         finally:
             engine.dispose()
+
+
+def _postgres_repo_round_trip(engine) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select, text
+
+    from vocal_coach.storage import repo
+    from vocal_coach.storage.db import make_session_factory
+    from vocal_coach.storage.models import Analysis, Job
+
+    factory = make_session_factory(engine)
+    ist = datetime(2026, 10, 3, 9, 30, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    metrics = {"pitch": {"f0_median_hz": 118.5, "f0_range_st": 9.25, "track": [1.5, None, 2.25]},
+               "intonation": {"flat_pct": 31.0}, "phrasing": {"pauses_per_min": 12.5},
+               "pace": {"articulation_rate_syl_per_sec": 4.75}, "energy": {"trailing_off_count": 3},
+               "nested": {"a": {"b": [{"c": None}, {"d": 0.125}]}}}
+    with factory() as s:
+        user = repo.upsert_user(s, "pg-sub", "pg@x.test", "pg")
+        analysis = repo.create_analysis(
+            s, user.id, file_name="a.m4a", drive_file_id=None, content_sha256="a" * 64, recorded_at=ist,
+            analyser_version="0.1.0", config_hash="sha256:c1", metrics_json=metrics, transcript_json=None)
+        job = repo.create_job(s, user.id)
+        repo.update_job(s, job.id, status="done", progress_pct=100, analysis_id=analysis.id)
+        user_id, analysis_id, job_id = user.id, analysis.id, job.id
+    with factory() as s:
+        loaded = repo.get_analysis(s, user_id, analysis_id)
+        assert loaded.metrics_json == metrics
+        assert loaded.transcript_json is None
+        assert s.execute(text("select transcript_json is null from analyses where id = :i"), {"i": analysis_id}).scalar() is True
+        assert loaded.recorded_at.tzinfo is not None and loaded.recorded_at == ist
+        [summary] = repo.list_analysis_summaries(s, user_id)
+        assert (summary.f0_median_hz, summary.f0_range_st, summary.flat_pct, summary.pauses_per_min,
+                summary.articulation_rate_syl_per_sec, summary.trailing_off_count) == (118.5, 9.25, 31.0, 12.5, 4.75, 3)
+        assert summary.fillers_per_min is None and summary.has_transcript is False and summary.has_coaching is False
+        assert summary.recorded_at == ist
+    with factory() as s:
+        assert repo.delete_analysis(s, user_id, analysis_id) is True
+        assert repo.get_job(s, user_id, job_id).analysis_id is None  # ON DELETE SET NULL
+        repo.create_analysis(
+            s, user_id, file_name="b.m4a", drive_file_id=None, content_sha256="b" * 64, recorded_at=ist,
+            analyser_version="0.1.0", config_hash="sha256:c1", metrics_json={})
+        s.execute(text("delete from users where id = :i"), {"i": user_id})
+        s.commit()
+        assert s.scalars(select(Analysis)).all() == []  # ON DELETE CASCADE
+        assert s.scalars(select(Job)).all() == []

@@ -373,12 +373,13 @@ analyses          id uuid pk, user_id fk, file_name, drive_file_id null, content
                   recorded_at (Drive modifiedTime or upload time), analysed_at,
                   analyser_version, config_hash, metrics_json jsonb, transcript_json jsonb null,
                   speaker_context text null, coaching_json jsonb null, coaching_warnings jsonb null
-                  unique (user_id, content_sha256, config_hash)
+                  unique (user_id, content_sha256, config_hash, analyser_version)
+                  index (user_id, recorded_at)
 jobs              id uuid pk, user_id fk, status (queued|running|done|failed), stage text,
                   progress_pct int, error text null, analysis_id fk null, created_at, updated_at
 ```
 
-Re-analysing the same file with the same config for the same user returns the stored analysis (job completes immediately, coaching re-run only if context or model changed).
+Re-analysing the same file with the same config and analyser version for the same user returns the stored analysis (a new analyser version yields a new row; the old one is kept) (job completes immediately, coaching re-run only if context or model changed).
 
 ## 9. Comparison
 
@@ -406,6 +407,8 @@ comparison:
 ```
 
 Per metric: `{path, values[], delta, arrow (↑ ↓ →), verdict (improved | worsened | neutral | unchanged)}`. `unchanged` when |delta| < `min_meaningful_change_pct` % of the earlier value. Differing `config_hash` across recordings → compared, but response carries `config_mismatch: true` and the UI shows a banner. Trend series returned for every path in `directions`.
+
+`delta`/verdict use the first and last available values; `partial: true` marks rows with gaps; `analyser_version_mismatch` reported alongside `config_mismatch`.
 
 ## 10. Jobs and progress
 
@@ -483,7 +486,7 @@ Extract numeric tokens from the four output fields (ignoring `//`). Allowed set 
 | POST | `/analyses` | JSON `{source:"drive", file_ids[], speaker_context, llm:{enabled, model}}` or multipart upload with same fields → `{job_ids[]}` |
 | GET | `/jobs/{id}` | status |
 | GET | `/jobs/{id}/events` | SSE |
-| GET | `/analyses` | list (id, file_name, recorded_at, key summary metrics, has_coaching) |
+| GET | `/analyses` | list (id, file_name, recorded_at, key summary metrics, has_coaching); returns summaries (no blobs), paginated |
 | GET | `/analyses/{id}` | full record |
 | DELETE | `/analyses/{id}` | delete analysis and cached files |
 | POST | `/analyses/{id}/coach` | re-run LLM with new `{speaker_context, model}` |

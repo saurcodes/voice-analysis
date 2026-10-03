@@ -13,7 +13,7 @@ Verdict = Literal["improved", "worsened", "neutral", "unchanged", "unavailable"]
 TRANSCRIPT_PREFIX = "transcript."  # paths under this prefix resolve into transcript_json
 ARROW_UP, ARROW_DOWN, ARROW_FLAT, ARROW_NA = "↑", "↓", "→", "—"
 PERCENT = 100.0
-MIN_POINTS = 2  # a change needs a start value and an end value
+MIN_POINTS = 2  # a change needs a start value and an end value; a mismatch needs two distinct values
 
 
 class ComparableAnalysis(BaseModel):
@@ -124,8 +124,8 @@ def compare(analyses: list[ComparableAnalysis], cfg: ComparisonConfig) -> Compar
     return ComparisonResult(
         analysis_ids=[a.id for a in ordered],
         recorded_at=[a.recorded_at for a in ordered],
-        config_mismatch=len({a.config_hash for a in ordered}) > 1,
-        analyser_version_mismatch=len({a.analyser_version for a in ordered}) > 1,
+        config_mismatch=len({a.config_hash for a in ordered}) >= MIN_POINTS,
+        analyser_version_mismatch=len({a.analyser_version for a in ordered}) >= MIN_POINTS,
         rows=rows,
         trend=trend,
     )

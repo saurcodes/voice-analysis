@@ -23,6 +23,7 @@ PROGRESS_MAX = 100
 FIRST_JOB_STAGE = "download"  # first pipeline stage (spec §10)
 SUMMARY_PAGE_SIZE = 50  # default page for GET /analyses summaries
 SUMMARY_FIRST_OFFSET = 0
+ROWS_PER_ID = 1  # a scoped delete by primary key removes exactly one row when it succeeds
 
 
 def _commit(session: Session) -> None:
@@ -160,7 +161,7 @@ def get_analysis(session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID) -
 def delete_analysis(session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID) -> bool:
     result = session.execute(delete(Analysis).where(Analysis.user_id == user_id, Analysis.id == analysis_id))
     _commit(session)
-    return result.rowcount == 1
+    return result.rowcount == ROWS_PER_ID
 
 
 def set_coaching(

@@ -61,13 +61,19 @@ Only changes to packages that affect `metrics.json` numbers (praat-parselmouth, 
 
 ## Storage (Plan 3)
 
-Postgres via SQLAlchemy 2 + Alembic. Tables: `users`, `drive_connections`, `analyses` (unique on user + file hash + config hash), `jobs`. Every repository read is scoped by `user_id`; other users' rows read as missing.
+Postgres via SQLAlchemy 2 + Alembic. Tables: `users`, `drive_connections`, `analyses` (unique on user + file hash + config hash + analyser version, indexed on user + `recorded_at`), `jobs`. Every repository read is scoped by `user_id`; other users' rows read as missing. A Python `None` in a JSON column is stored as SQL `NULL`, and NaN/Infinity are rejected on every backend.
 
 ```bash
 export DATABASE_URL=postgresql+psycopg://vocal:vocal@localhost:5432/vocal_coach
 alembic upgrade head          # or: python -c "from vocal_coach.storage.migrate import upgrade_to_head as u; import os; u(os.environ['DATABASE_URL'])"
 ```
 
-Tests run the models on in-memory SQLite. `tests/test_migrations.py::test_upgrade_head_on_real_postgres` runs the migration against a throwaway Postgres container and is skipped when Docker is not installed.
+The migration URL is taken from `-x url=…`, then the programmatic `upgrade_to_head(url)` argument, then `DATABASE_URL`, then settings (`.env`), then `alembic.ini`. Run migrations once at startup from a single process (the compose entrypoint), not from every worker; `fail_stale_jobs` assumes a single backend process, and running it from several processes would fail jobs another process is still running.
 
-Comparison (`vocal_coach/storage/comparison.py`) follows `config.yaml → comparison`: per metric path, `delta = last − first`, step deltas, arrow `↑ ↓ →`, verdict `improved / worsened / neutral / unchanged / unavailable`. `unchanged` means the change is below `min_meaningful_change_pct` of the first value. A metric missing in any recording yields `unavailable`, never an error. Analyses with different `config_hash` are still compared, with `config_mismatch: true`.
+**Summaries vs full rows.** `repo.list_analysis_summaries(user_id, limit=, offset=)` backs the analyses list: one query of scalar columns plus a few headline metrics extracted in SQL (JSON paths), with `has_transcript` / `has_coaching` flags; it never loads the metrics/transcript/coaching blobs. Load full rows only where they are shown or compared: `repo.get_analysis` for one, `repo.get_analyses(user_id, ids)` for a comparison (one scoped query, unknown or foreign ids dropped). For job progress, an SSE handler should open one short session per poll (or rely on `get_job`, which refreshes the row via `populate_existing`), never hold one session open for the whole stream.
+
+**Duplicates.** Submitting the same file twice (two tabs, a double click) produces one row: `create_analysis` catches the unique-key violation, rolls back and returns the existing analysis. First login races in `upsert_user` resolve the same way. Every repository writer rolls the session back on failure, so the session stays usable.
+
+Tests run the models on in-memory SQLite. `tests/test_migrations.py::test_upgrade_head_on_real_postgres` runs the migration against a throwaway Postgres container, round-trips data through the repository (JSONB, time zones, SQL `NULL`, cascades, summaries) and checks models and migration match; it is skipped when Docker is not installed.
+
+Comparison (`vocal_coach/storage/comparison.py`) follows `config.yaml → comparison`: per metric path, `delta = last − first`, step deltas, arrow `↑ ↓ →`, verdict `improved / worsened / neutral / unchanged / unavailable`. `unchanged` means the change is below `min_meaningful_change_pct` of the first value. `delta` and the verdict span the first and last recordings that have the metric; a row with gaps is marked `partial: true`, and a metric present in fewer than two recordings is `unavailable`, never an error. Ties on `recorded_at` are ordered by id. Analyses with different `config_hash` or `analyser_version` are still compared, with `config_mismatch` / `analyser_version_mismatch: true`.
