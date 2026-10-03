@@ -35,6 +35,10 @@ def test_normalise_token(raw, expected):
     ("added", 2),      # "-ed" after d is a syllable
     ("red", 1),        # too short to be a suffix
     ("bed", 1),
+    ("agreed", 2),     # vowel before "-ed": no silent suffix
+    ("proceed", 2),
+    ("freed", 1),
+    ("hundred", 1),    # known irregular: true count 2, heuristic undercounts
 ])
 def test_count_syllables(word, expected):
     assert count_syllables(word) == expected
