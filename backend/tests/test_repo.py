@@ -1,6 +1,7 @@
 import uuid
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from vocal_coach.storage import repo
@@ -38,9 +39,7 @@ def test_find_then_create_dedupes_same_file_same_config(session):
     assert repo.find_analysis(session, u.id, "a" * 64, "sha256:c1", "0.1.0").id == a.id
     assert repo.find_analysis(session, u.id, "a" * 64, "sha256:c2", "0.1.0") is None
     assert repo.find_analysis(session, u.id, "a" * 64, "sha256:c1", "0.2.0") is None
-    with pytest.raises(IntegrityError):
-        _mk(session, u)
-    session.rollback()
+    assert _mk(session, u).id == a.id  # duplicate create returns the existing row (dedupe race safe)
 
 
 def test_cross_user_get_returns_none(session):
@@ -114,3 +113,109 @@ def test_list_tie_break_is_deterministic(session):
     ids2 = [x.id for x in repo.list_analyses(session, u.id)]
     assert ids1 == ids2
     assert ids1 == sorted([a1.id, a2.id], reverse=True)
+
+
+@pytest.fixture
+def factory(tmp_path):
+    """File-backed SQLite so two sessions use two real connections."""
+    engine = make_engine(f"sqlite+pysqlite:///{tmp_path / 'repo.db'}")
+    create_all(engine)
+    yield make_session_factory(engine)
+    engine.dispose()
+
+
+def test_duplicate_create_analysis_returns_existing_and_session_stays_usable(session):
+    u = repo.upsert_user(session, "sub-1", None, None)
+    first = _mk(session, u)
+    second = _mk(session, u)
+    assert second.id == first.id
+    assert len(repo.list_analyses(session, u.id)) == 1
+    job = repo.create_job(session, u.id)  # session is still usable after the swallowed IntegrityError
+    assert job.stage == "download"
+
+
+def test_create_analysis_race_with_other_session_returns_existing(factory):
+    with factory() as s1, factory() as s2:
+        u = repo.upsert_user(s1, "sub-1", None, None)
+        other = _mk(s2, u)  # the other tab won the race
+        mine = _mk(s1, u)
+        assert mine.id == other.id
+        assert repo.create_job(s1, u.id).user_id == u.id
+
+
+def test_create_analysis_reraises_unrelated_integrity_error(session):
+    ghost = type("Ghost", (), {"id": uuid.uuid4()})()  # no such user: FK violation, nothing to dedupe to
+    with pytest.raises(IntegrityError):
+        _mk(session, ghost)
+    assert repo.upsert_user(session, "after", None, None).keycloak_sub == "after"
+
+
+def test_upsert_user_race_returns_existing_row(factory, monkeypatch):
+    from vocal_coach.storage.models import User
+    with factory() as s1:
+        real_scalar = s1.scalar
+        raced = []
+
+        def racing_scalar(stmt, *args, **kwargs):
+            if not raced:  # first lookup misses; meanwhile another request inserts the same sub
+                raced.append(True)
+                with factory() as s2:
+                    s2.add(User(keycloak_sub="sub-r", email="old@x.test", username="old"))
+                    s2.commit()
+                return None
+            return real_scalar(stmt, *args, **kwargs)
+
+        monkeypatch.setattr(s1, "scalar", racing_scalar)
+        user = repo.upsert_user(s1, "sub-r", "new@x.test", "new")
+        monkeypatch.undo()
+        assert raced == [True]
+        assert (user.email, user.username) == ("new@x.test", "new")
+    with factory() as s3:
+        rows = s3.scalars(select(User).where(User.keycloak_sub == "sub-r")).all()
+        assert len(rows) == 1 and rows[0].id == user.id and rows[0].email == "new@x.test"
+
+
+def test_get_job_sees_updates_from_another_session(factory):
+    with factory() as a, factory() as b:
+        u = repo.upsert_user(a, "sub-1", None, None)
+        job = repo.create_job(a, u.id)
+        assert repo.get_job(a, u.id, job.id).status == "queued"
+        repo.update_job(b, job.id, status="running", progress_pct=40)
+        polled = repo.get_job(a, u.id, job.id)
+        assert (polled.status, polled.progress_pct) == ("running", 40)
+
+
+def test_update_job_rejects_out_of_range_progress(session):
+    u = repo.upsert_user(session, "a", None, None)
+    j = repo.create_job(session, u.id)
+    with pytest.raises(ValueError):
+        repo.update_job(session, j.id, progress_pct=101)
+    with pytest.raises(ValueError):
+        repo.update_job(session, j.id, progress_pct=-1)
+    assert repo.update_job(session, j.id, progress_pct=100).progress_pct == 100
+
+
+def test_terminal_job_status_is_final(session):
+    u = repo.upsert_user(session, "a", None, None)
+    done = repo.update_job(session, repo.create_job(session, u.id).id, status="done")
+    failed = repo.update_job(session, repo.create_job(session, u.id).id, status="failed")
+    with pytest.raises(ValueError, match="terminal"):
+        repo.update_job(session, done.id, status="running")
+    with pytest.raises(ValueError, match="terminal"):
+        repo.update_job(session, failed.id, status="done")
+    assert repo.get_job(session, u.id, done.id).status == "done"
+
+
+def test_writer_failure_rolls_back_session(session, monkeypatch):
+    u = repo.upsert_user(session, "a", None, None)
+    j = repo.create_job(session, u.id)
+
+    def boom():
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(session, "commit", boom)
+    with pytest.raises(RuntimeError):
+        repo.update_job(session, j.id, stage="analyse")
+    monkeypatch.undo()
+    assert not session.dirty
+    assert repo.get_job(session, u.id, j.id).stage == "download"

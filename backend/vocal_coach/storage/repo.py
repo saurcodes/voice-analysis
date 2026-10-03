@@ -1,18 +1,33 @@
 """All database access, strictly scoped by user_id. Rows the user does not own are None.
 
-Exception: `update_job` is called by the job runner, which owns job state and has no user in hand; reads (`get_job`) remain scoped."""
+Exception: `update_job` is called by the job runner, which owns job state and has no user in hand; reads (`get_job`) remain scoped.
+
+Every writer leaves the session usable: a failed commit is rolled back before the error propagates."""
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from vocal_coach.storage.models import JOB_STATUSES, Analysis, Job, User
 
 JOB_UPDATABLE = frozenset({"status", "stage", "progress_pct", "error", "analysis_id"})
 STALE_STATUSES = ("queued", "running")  # a restart means these can never finish
+TERMINAL_STATUSES = ("done", "failed")  # a finished job's status never changes again
+PROGRESS_MIN = 0  # progress_pct is a percentage: 0 … 100 inclusive
+PROGRESS_MAX = 100
+FIRST_JOB_STAGE = "download"  # first pipeline stage (spec §10)
+
+
+def _commit(session: Session) -> None:
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
 
 
 def upsert_user(session: Session, keycloak_sub: str, email: str | None, username: str | None) -> User:
@@ -20,10 +35,18 @@ def upsert_user(session: Session, keycloak_sub: str, email: str | None, username
     if user is None:
         user = User(keycloak_sub=keycloak_sub, email=email, username=username)
         session.add(user)
-    else:
-        user.email = email
-        user.username = username
-    session.commit()
+        try:
+            session.commit()
+            return user
+        except IntegrityError:
+            # Concurrent first login: another request inserted this sub between our select and insert.
+            session.rollback()
+            user = session.scalar(select(User).where(User.keycloak_sub == keycloak_sub))
+            if user is None:
+                raise
+    user.email = email
+    user.username = username
+    _commit(session)
     return user
 
 
@@ -41,13 +64,25 @@ def create_analysis(
     recorded_at: datetime, analyser_version: str, config_hash: str, metrics_json: dict,
     transcript_json: dict | None = None, speaker_context: str | None = None,
 ) -> Analysis:
+    """Insert an analysis. If the same (user, file, config, analyser version) already exists — e.g. the
+    same file submitted from two tabs — the existing row is returned instead."""
     row = Analysis(
         user_id=user_id, file_name=file_name, drive_file_id=drive_file_id, content_sha256=content_sha256,
         recorded_at=recorded_at, analyser_version=analyser_version, config_hash=config_hash,
         metrics_json=metrics_json, transcript_json=transcript_json, speaker_context=speaker_context,
     )
     session.add(row)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing = find_analysis(session, user_id, content_sha256, config_hash, analyser_version)
+        if existing is None:  # some other constraint failed; nothing to dedupe to
+            raise
+        return existing
+    except Exception:
+        session.rollback()
+        raise
     return row
 
 
@@ -56,16 +91,16 @@ def list_analyses(session: Session, user_id: uuid.UUID) -> list[Analysis]:
 
 
 def get_analysis(session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID) -> Analysis | None:
-    return session.scalar(select(Analysis).where(Analysis.user_id == user_id, Analysis.id == analysis_id))
+    return session.scalar(
+        select(Analysis).where(Analysis.user_id == user_id, Analysis.id == analysis_id)
+        .execution_options(populate_existing=True)
+    )
 
 
 def delete_analysis(session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID) -> bool:
-    row = get_analysis(session, user_id, analysis_id)
-    if row is None:
-        return False
-    session.delete(row)
-    session.commit()
-    return True
+    result = session.execute(delete(Analysis).where(Analysis.user_id == user_id, Analysis.id == analysis_id))
+    _commit(session)
+    return result.rowcount == 1
 
 
 def set_coaching(
@@ -78,14 +113,14 @@ def set_coaching(
     row.speaker_context = speaker_context
     row.coaching_json = coaching_json
     row.coaching_warnings = coaching_warnings
-    session.commit()
+    _commit(session)
     return row
 
 
-def create_job(session: Session, user_id: uuid.UUID, stage: str = "queued") -> Job:
-    job = Job(user_id=user_id, status="queued", stage=stage, progress_pct=0)
+def create_job(session: Session, user_id: uuid.UUID, stage: str = FIRST_JOB_STAGE) -> Job:
+    job = Job(user_id=user_id, status="queued", stage=stage, progress_pct=PROGRESS_MIN)
     session.add(job)
-    session.commit()
+    _commit(session)
     return job
 
 
@@ -95,22 +130,29 @@ def update_job(session: Session, job_id: uuid.UUID, **fields) -> Job | None:
         raise ValueError(f"unknown job fields: {sorted(unknown)}")
     if "status" in fields and fields["status"] not in JOB_STATUSES:
         raise ValueError(f"invalid job status {fields['status']!r}; expected one of {JOB_STATUSES}")
-    job = session.get(Job, job_id)
+    if "progress_pct" in fields and not PROGRESS_MIN <= fields["progress_pct"] <= PROGRESS_MAX:
+        raise ValueError(f"progress_pct must be in [{PROGRESS_MIN}, {PROGRESS_MAX}], got {fields['progress_pct']!r}")
+    job = session.get(Job, job_id, populate_existing=True)
     if job is None:
         return None
+    if job.status in TERMINAL_STATUSES and "status" in fields and fields["status"] != job.status:
+        raise ValueError("job is terminal")
     for k, v in fields.items():
         setattr(job, k, v)
-    session.commit()
+    _commit(session)
     return job
 
 
 def get_job(session: Session, user_id: uuid.UUID, job_id: uuid.UUID) -> Job | None:
-    return session.scalar(select(Job).where(Job.user_id == user_id, Job.id == job_id))
+    # populate_existing: a poller holding one session must see the runner's committed updates.
+    return session.scalar(
+        select(Job).where(Job.user_id == user_id, Job.id == job_id).execution_options(populate_existing=True)
+    )
 
 
 def fail_stale_jobs(session: Session, message: str = "server restarted") -> int:
     result = session.execute(
         update(Job).where(Job.status.in_(STALE_STATUSES)).values(status="failed", error=message)
     )
-    session.commit()
+    _commit(session)
     return int(result.rowcount or 0)
