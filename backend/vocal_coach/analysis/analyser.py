@@ -28,7 +28,7 @@ ANALYSER_VERSION = "0.1.0"
 
 
 def _empty_report(source: SourceInfo, cfg: AppConfig) -> MetricsReport:
-    """Report for audio too short to analyse (spec section 10): every metric null or zero."""
+    """Report for audio too short to analyse (spec section 15, error handling): every metric null or zero."""
     return MetricsReport(
         schema_version=SCHEMA_VERSION,
         analyser_version=ANALYSER_VERSION,
