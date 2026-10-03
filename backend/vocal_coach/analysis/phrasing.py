@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+import numpy as np
 from parselmouth.praat import call
 from pydantic import BaseModel
 
@@ -56,15 +57,25 @@ def _sounding_intervals(tracks: Tracks, cfg: AnalysisConfig) -> list[Interval]:
 
 
 def compute(tracks: Tracks, cfg: AnalysisConfig) -> PhrasingResult:
-    phrases = _sounding_intervals(tracks, cfg)
+    # Gate on voicing: if no voiced frames detected, skip Praat and return empty result.
+    # This avoids spurious silence detection on unvoiced audio and reuses config-driven pitch tracking.
+    if not np.any(~np.isnan(tracks.f0_hz)):
+        return PhrasingResult(
+            block=PhrasingBlock(
+                phrase_count=0,
+                speaking_time_s=0.0,
+                mean_phrase_length_s=None,
+                pause_count=0,
+                pauses_per_min=0.0,
+                mean_pause_length_s=None,
+                long_pause_count_ge_1s=0,
+                long_pauses=[],
+            ),
+            phrases=[],
+            pauses=[],
+        )
 
-    # Praat's "To TextGrid (silences)" can misclassify very low-energy signals as one continuous
-    # "sounding" interval spanning the entire duration. Filter out this false positive:
-    # if there's only one interval covering >=99% of the audio with very low intensity, discard it.
-    if len(phrases) == 1 and phrases[0].duration_s >= 0.99 * tracks.duration_s:
-        intensity_db = call(tracks.sound, "Get intensity (dB)")
-        if intensity_db < 50:  # Low energy indicates noise floor, not actual speech
-            phrases = []
+    phrases = _sounding_intervals(tracks, cfg)
 
     pauses = [_interval(a.end_s, b.start_s) for a, b in zip(phrases, phrases[1:])]
     long_pauses = [p for p in pauses if p.duration_s >= LONG_PAUSE_S]
