@@ -14,7 +14,6 @@ from vocal_coach.config import AnalysisConfig, ArticulationConfig
 # STFT framing: 25 ms Hann window, 10 ms hop (algorithm constants, not coaching thresholds).
 STFT_WINDOW_S = 0.025
 STFT_HOP_S = 0.010
-TILT_BAND_HZ = (500.0, 8000.0)
 WELCH_NPERSEG = 1024
 FORMANT_TIME_STEP_S = 0.01
 FORMANT_COUNT = 5
@@ -73,15 +72,23 @@ def _hf_ratio(x: np.ndarray, sr: int, art: ArticulationConfig) -> float | None:
     return float(np.median(10 * np.log10(hf[ok] / lf[ok])))
 
 
-def _tilt(x: np.ndarray, sr: int) -> float | None:
+def _tilt(x: np.ndarray, sr: int, art: ArticulationConfig) -> float | None:
+    """Two-band spectral tilt (hf vs lf band mean power), dB per octave."""
     if len(x) < WELCH_NPERSEG:
         return None
     f, p = welch(x, fs=sr, nperseg=WELCH_NPERSEG)
-    m = (f >= TILT_BAND_HZ[0]) & (f <= TILT_BAND_HZ[1]) & (p > 0)
-    if m.sum() < 3:
+    lf_mask = (f >= art.lf_band_hz[0]) & (f <= art.lf_band_hz[1])
+    hf_mask = (f >= art.hf_band_hz[0]) & (f <= art.hf_band_hz[1])
+    if not lf_mask.any() or not hf_mask.any():
         return None
-    slope, _ = np.polyfit(np.log2(f[m]), 10 * np.log10(p[m]), 1)
-    return float(slope)
+    lf_power = float(np.mean(p[lf_mask]))
+    hf_power = float(np.mean(p[hf_mask]))
+    if lf_power <= 0 or hf_power <= 0:
+        return None
+    lf_mid = (art.lf_band_hz[0] + art.lf_band_hz[1]) / 2.0
+    hf_mid = (art.hf_band_hz[0] + art.hf_band_hz[1]) / 2.0
+    octaves = np.log2(hf_mid / lf_mid)
+    return float((10 * np.log10(hf_power) - 10 * np.log10(lf_power)) / octaves)
 
 
 def _modulation_depth(tracks: Tracks, speaking: np.ndarray, acfg: AnalysisConfig, art: ArticulationConfig) -> float | None:
@@ -152,7 +159,7 @@ def compute(
 
     return ArticulationBlock(
         hf_energy_ratio_db=_hf_ratio(speech, tracks.sr, art) if len(speech) else None,
-        spectral_tilt_db_per_oct=_tilt(speech, tracks.sr) if len(speech) else None,
+        spectral_tilt_db_per_oct=_tilt(speech, tracks.sr, art) if len(speech) else None,
         modulation_depth=_modulation_depth(tracks, speaking, acfg, art),
         syllable_peak_prominence_mean_db=float(np.mean(proms)) if len(proms) else None,
         syllable_peak_prominence_p25_db=float(np.percentile(proms, 25)) if len(proms) else None,
