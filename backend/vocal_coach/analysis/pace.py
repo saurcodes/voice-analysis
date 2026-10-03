@@ -10,6 +10,9 @@ from scipy.signal import find_peaks
 from vocal_coach.analysis.tracks import Tracks
 from vocal_coach.config import AnalysisConfig
 
+PEAK_WLEN_S = 0.4  # window for prominence bases: a syllable is judged against its ~400 ms neighbourhood, not against distant silence
+MIN_WLEN_FRAMES = 3  # find_peaks needs a window of at least 3 samples (peak plus one each side)
+
 
 class PaceBlock(BaseModel):
     syllable_count_est: int
@@ -24,13 +27,11 @@ class PaceResult(NamedTuple):
 
 
 def compute(tracks: Tracks, cfg: AnalysisConfig, speaking_time_s: float) -> PaceResult:
-    intensity = tracks.intensity_db.copy()
     voiced = tracks.voiced_mask_at(tracks.int_times)
-    # Push unvoiced frames far below everything so peaks can only form in voiced regions.
-    floor = float(np.nanmin(intensity)) - 100.0 if len(intensity) else 0.0
-    intensity[~voiced] = floor
-
-    all_peaks, all_props = find_peaks(intensity, prominence=cfg.syllable_peak_prominence_db)
+    wlen_frames = max(MIN_WLEN_FRAMES, int(round(PEAK_WLEN_S / cfg.time_step_s)))
+    all_peaks, all_props = find_peaks(
+        tracks.intensity_db, prominence=cfg.syllable_peak_prominence_db, wlen=wlen_frames,
+    )
     keep = voiced[all_peaks]
     peak_idx = all_peaks[keep]
     prominences = all_props["prominences"][keep]
