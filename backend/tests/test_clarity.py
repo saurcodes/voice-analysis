@@ -70,6 +70,20 @@ def test_rushed_words_and_runs(cfg):
     assert blk.rushed_runs[0].text == "basically actually beautiful"
 
 
+def test_zero_duration_word_neither_extends_nor_breaks_a_rushed_run(cfg):
+    x = synth.tone(120, 2.0)
+    words = [
+        _w(0.0, 0.3, "basically"), _w(0.3, 0.6, "actually"),
+        _w(0.6, 0.6, "glitch"),  # zero duration: no rate, must be transparent to the run
+        _w(0.6, 0.9, "beautiful"),
+    ]
+    blk = clarity.compute(words, [_seg(0.0, 2.0, "…")], _tracks(x, cfg), cfg.clarity)
+    assert cfg.clarity.rushed_run_min_words == 3
+    assert len(blk.rushed_runs) == 1
+    assert blk.rushed_runs[0].start_s == 0.0 and blk.rushed_runs[0].end_s == 0.9
+    assert blk.rushed_runs[0].text == "basically actually beautiful"
+
+
 def test_zero_duration_word_does_not_divide_by_zero(cfg):
     x = synth.tone(120, 1.0)
     words = [_w(0.5, 0.5, "glitch"), _w(0.5, 0.9, "fine")]

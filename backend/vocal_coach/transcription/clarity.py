@@ -54,6 +54,8 @@ def _rushed(words: list[TranscriptWord], cfg: ClarityConfig) -> tuple[float | No
     runs: list[Span] = []
     run: list[TranscriptWord] = []
     for w, f in zip(words, flags):
+        if f is None:
+            continue  # no duration, no rate: neither extends nor breaks a run
         if f:
             run.append(w)
             continue

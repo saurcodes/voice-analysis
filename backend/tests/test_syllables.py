@@ -28,6 +28,13 @@ def test_normalise_token(raw, expected):
     ("...", 0),        # punctuation only
     ("you", 1),
     ("beautiful", 3),
+    ("assigned", 2),   # silent "-ed"
+    ("developed", 3),
+    ("leveraged", 3),
+    ("wanted", 2),     # "-ed" after t is a syllable
+    ("added", 2),      # "-ed" after d is a syllable
+    ("red", 1),        # too short to be a suffix
+    ("bed", 1),
 ])
 def test_count_syllables(word, expected):
     assert count_syllables(word) == expected
