@@ -45,3 +45,29 @@ def test_voice_quality_on_silence_is_null(cfg):
     blk = voice_quality.compute(_tracks(synth.silence(3.0), cfg), cfg.analysis, low_confidence=True)
     assert blk.hnr_db is None and blk.jitter_local is None and blk.shimmer_local is None
     assert blk.low_confidence is True
+
+
+def _gated_speech(**kw):
+    a = synth.am(synth.vowel(500, 1500, 120, 3.0, **kw), 4.0)
+    # Gaps of EXACT digital zeros (noise-gated export): no with_noise_floor.
+    return synth.concat(synth.silence(1.0), a, synth.silence(1.0), a, synth.silence(1.0))
+
+
+def _quality_of_raw(x, cfg):
+    tr = extract_tracks(synth.to_sound(x), cfg.analysis)
+    return quality.compute(tr, cfg.analysis, [_phrase(1.0, 4.0), _phrase(5.0, 8.0)])
+
+
+def test_digital_zero_gaps_give_zero_floor_and_no_flag(cfg):
+    blk = _quality_of_raw(_gated_speech(), cfg)
+    assert blk.noise_floor_db == 0.0
+    assert 0 < blk.snr_estimate_db < 100
+    assert blk.low_confidence is False
+    assert blk.reasons == []
+
+
+def test_digital_zero_gaps_loud_speech_not_flagged(cfg):
+    blk = _quality_of_raw(_gated_speech(amp=0.9), cfg)
+    assert blk.noise_floor_db == 0.0
+    assert blk.low_confidence is False
+    assert blk.reasons == []

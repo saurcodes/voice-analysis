@@ -29,3 +29,18 @@ def test_f0_between_and_voiced_mask(cfg):
     assert len(tr.f0_between(1.2, 1.8)) == 0
     mask = tr.voiced_mask_at(np.array([0.5, 1.5, 2.5]))
     assert mask.tolist() == [True, False, True]
+
+
+def test_digital_silence_intensity_is_clamped_at_zero(cfg):
+    # 1 s of exact digital zeros in the middle: Praat would report -300 dB there.
+    x = synth.concat(synth.tone(120, 1.0), synth.silence(1.0), synth.tone(120, 1.0))
+    tr = extract_tracks(synth.to_sound(x), cfg.analysis)
+    assert tr.intensity_db.min() == 0.0
+    assert not np.any(tr.intensity_db < 0.0)
+
+
+def test_voiced_mask_on_empty_track_is_all_false(cfg):
+    tr = extract_tracks(synth.to_sound(synth.tone(120, 1.0)), cfg.analysis)
+    tr.f0_times = np.array([])
+    tr.f0_hz = np.array([])
+    assert tr.voiced_mask_at(np.array([0.1, 0.5])).tolist() == [False, False]

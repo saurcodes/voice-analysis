@@ -27,3 +27,14 @@ def test_silent_window_has_null_f0(cfg):
     assert blk.windows[1].f0_median_hz is None
     assert blk.windows[1].f0_sd_st is None
     assert blk.windows[1].intensity_median_db is not None
+
+
+def test_digital_silence_window_has_null_intensity(cfg):
+    # Exact zeros (no noise floor): the clamped 0 dB frames are not real intensity.
+    # The tone ends 0.1 s before the window edge: Praat's ~43 ms intensity window
+    # (3.2 / pitch_floor) otherwise carries the tone's decay into window 1's first frames.
+    x = synth.concat(synth.tone(120, 14.9), synth.silence(15.1))
+    blk = timeline.compute(extract_tracks(synth.to_sound(x), cfg.analysis), cfg.analysis)
+    assert blk.windows[1].intensity_median_db is None
+    assert blk.windows[0].intensity_median_db is not None
+    assert blk.windows[0].intensity_median_db > 0
