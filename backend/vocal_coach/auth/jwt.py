@@ -28,6 +28,20 @@ def fetch_jwks(url: str) -> dict:
     return response.json()
 
 
+def _signing_keys(data: dict) -> dict[str, PyJWK]:
+    """Keycloak's JWKS also lists an RSA-OAEP key with ``use: enc``; PyJWT cannot load it, and it
+    never signs tokens. Keep signing keys only, and skip any key PyJWT cannot load (unknown alg)."""
+    keys: dict[str, PyJWK] = {}
+    for k in data.get("keys", []):
+        if "kid" not in k or k.get("use", "sig") != "sig":
+            continue
+        try:
+            keys[k["kid"]] = PyJWK(k)
+        except jwt.PyJWTError:
+            continue
+    return keys
+
+
 class JWKSCache:
     def __init__(self, url: str, fetch: Callable[[str], dict] | None = None,
                  min_refresh_interval_s: float = DEFAULT_MIN_REFRESH_INTERVAL_S):
@@ -47,7 +61,7 @@ class JWKSCache:
             data = self._fetch(self._url)
         except httpx.HTTPError as e:
             raise JWKSUnavailable(f"could not fetch JWKS: {e}") from e
-        self._keys = {k["kid"]: PyJWK(k) for k in data.get("keys", []) if "kid" in k}
+        self._keys = _signing_keys(data)
         self._last_refresh = time.monotonic()
 
     def key_for(self, kid: str) -> PyJWK:

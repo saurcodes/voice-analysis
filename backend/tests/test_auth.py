@@ -107,3 +107,16 @@ def test_jwks_fetch_failure_raises_jwks_unavailable(keys):
     cache = JWKSCache("http://kc.test/jwks", fetch=failing_fetch, min_refresh_interval_s=0.0)
     with pytest.raises(JWKSUnavailable):
         verify_token(mint(pem, kid, iss=ISS, aud=AUD), issuer=ISS, audience=AUD, jwks=cache)
+
+
+def test_encryption_keys_in_jwks_are_ignored():
+    # Keycloak's realm JWKS also publishes an RSA-OAEP key with use=enc; PyJWT cannot load it as a
+    # signing key, and it must not stop the RS256 signing key from verifying tokens.
+    pem, jwks, kid = make_rsa_jwks()
+    sig = jwks["keys"][0]
+    enc = {**sig, "kid": "enc-key", "use": "enc", "alg": "RSA-OAEP"}
+    cache = JWKSCache("http://kc.test/jwks", fetch=lambda url: {"keys": [enc, sig]}, min_refresh_interval_s=0.0)
+    claims = verify_token(mint(pem, kid, iss=ISS, aud=AUD), issuer=ISS, audience=AUD, jwks=cache)
+    assert claims["sub"] == "user-1"
+    with pytest.raises(AuthError, match="unknown signing key"):
+        cache.key_for("enc-key")
