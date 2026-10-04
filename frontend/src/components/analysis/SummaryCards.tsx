@@ -8,15 +8,13 @@ type Transcript = components["schemas"]["Transcript"];
 
 /**
  * The 8 Summary stat tiles plus the recording-quality banner. Low-confidence badges are
- * sourced from the schema's own low_confidence flags: PitchBlock itself carries none, so
- * the two pitch-derived cards (median pitch, pitch range) fall back to
- * voice_quality.low_confidence, which is exactly the signal (jitter/shimmer/HNR estimation
- * failure) that undermines F0 tracking; the articulation-rate card falls back to
- * articulation.low_confidence for the same reason (no low_confidence flag lives on
- * PaceBlock, where articulation_rate_syl_per_sec actually comes from). The remaining 5
- * cards (flat endings, pauses/min, trailing off, fillers/min, eaten words) have no
- * corresponding low_confidence signal anywhere in MetricsReport/DerivedBlock, so they
- * never show the badge; page-wide quality issues still surface via QualityBanner.
+ * sourced from two schema flags: `recording_quality.low_confidence` is the general
+ * acoustic-quality signal (noise floor / SNR) that covers every metric derived from the
+ * raw acoustic signal, so Median pitch, Pitch range, Flat endings, Pauses/min, Trailing
+ * off and Fillers/min all badge from it. Articulation rate and Eaten words badge from
+ * `articulation.low_confidence` instead, since that block carries its own independent
+ * confidence flag (formant/spectral estimation can fail separately from general
+ * noise/SNR issues) and is the more specific signal for those two cards.
  */
 export function SummaryCards({
   metrics,
@@ -25,7 +23,7 @@ export function SummaryCards({
   metrics: MetricsReport;
   transcript: Transcript | null;
 }) {
-  const pitchLowConfidence = metrics.voice_quality.low_confidence;
+  const recordingLowConfidence = metrics.recording_quality.low_confidence;
   const articulationLowConfidence = metrics.articulation.low_confidence;
 
   const eatenCount = transcript?.derived.clarity.eaten_words.length ?? 0;
@@ -39,26 +37,28 @@ export function SummaryCards({
           unit={METRIC_LABELS["pitch.f0_median_hz"].unit}
           meaning={METRIC_LABELS["pitch.f0_median_hz"].meaning}
           value={fmt(metrics.pitch.f0_median_hz, 0)}
-          lowConfidence={pitchLowConfidence}
+          lowConfidence={recordingLowConfidence}
         />
         <MetricCard
           label={METRIC_LABELS["pitch.f0_range_st"].label}
           unit={METRIC_LABELS["pitch.f0_range_st"].unit}
           meaning={METRIC_LABELS["pitch.f0_range_st"].meaning}
           value={fmt(metrics.pitch.f0_range_st)}
-          lowConfidence={pitchLowConfidence}
+          lowConfidence={recordingLowConfidence}
         />
         <MetricCard
           label={METRIC_LABELS["intonation.flat_pct"].label}
           unit={METRIC_LABELS["intonation.flat_pct"].unit}
           meaning={METRIC_LABELS["intonation.flat_pct"].meaning}
           value={fmt(metrics.intonation.flat_pct)}
+          lowConfidence={recordingLowConfidence}
         />
         <MetricCard
           label={METRIC_LABELS["phrasing.pauses_per_min"].label}
           unit={METRIC_LABELS["phrasing.pauses_per_min"].unit}
           meaning={METRIC_LABELS["phrasing.pauses_per_min"].meaning}
           value={fmt(metrics.phrasing.pauses_per_min)}
+          lowConfidence={recordingLowConfidence}
         />
         <MetricCard
           label={METRIC_LABELS["pace.articulation_rate_syl_per_sec"].label}
@@ -72,12 +72,14 @@ export function SummaryCards({
           unit={METRIC_LABELS["energy.trailing_off_count"].unit}
           meaning={METRIC_LABELS["energy.trailing_off_count"].meaning}
           value={fmt(metrics.energy.trailing_off_count, 0)}
+          lowConfidence={recordingLowConfidence}
         />
         <MetricCard
           label={METRIC_LABELS["transcript.derived.fillers_per_min"].label}
           unit={METRIC_LABELS["transcript.derived.fillers_per_min"].unit}
           meaning={METRIC_LABELS["transcript.derived.fillers_per_min"].meaning}
           value={fmt(transcript?.derived.fillers_per_min ?? null)}
+          lowConfidence={recordingLowConfidence}
         />
         <MetricCard
           label={METRIC_LABELS["transcript.derived.clarity.word_final_drop_fraction"].label}
@@ -85,6 +87,7 @@ export function SummaryCards({
           meaning={METRIC_LABELS["transcript.derived.clarity.word_final_drop_fraction"].meaning}
           value={fmtPercent(transcript?.derived.clarity.word_final_drop_fraction ?? null)}
           secondary={transcript ? `${eatenCount} word${eatenCount === 1 ? "" : "s"}` : undefined}
+          lowConfidence={articulationLowConfidence}
         />
       </div>
     </div>

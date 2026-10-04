@@ -12,10 +12,16 @@ interface RawRow {
   available: boolean;
 }
 
+/** RFC 6266 allows both `filename=` (legacy, ASCII) and `filename*=` (RFC 5987, UTF-8 +
+ * percent-encoded) on the same header, with `filename=` conventionally listed first for
+ * backward compatibility. `filename*=` is checked first so its properly-encoded value
+ * wins whenever both are present. */
 function parseFilename(contentDisposition: string | null, fallback: string): string {
   if (!contentDisposition) return fallback;
-  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(contentDisposition);
-  return match ? decodeURIComponent(match[1]) : fallback;
+  const extended = /filename\*=(?:UTF-8'')?([^";]+)/i.exec(contentDisposition);
+  if (extended) return decodeURIComponent(extended[1]);
+  const plain = /filename="?([^";]+)"?/i.exec(contentDisposition);
+  return plain ? decodeURIComponent(plain[1]) : fallback;
 }
 
 async function errorDetail(response: Response): Promise<string> {

@@ -26,6 +26,19 @@ function cardFor(label: string): HTMLElement {
   return card as HTMLElement;
 }
 
+/** The default fixture with recording_quality.low_confidence and articulation.low_confidence
+ * forced to specific values, everything else unchanged. */
+function detailWithConfidence(recordingLowConfidence: boolean, articulationLowConfidence: boolean) {
+  const base = analysisDetail();
+  return analysisDetail("default", {
+    metrics: {
+      ...base.metrics,
+      recording_quality: { ...base.metrics.recording_quality, low_confidence: recordingLowConfidence },
+      articulation: { ...base.metrics.articulation, low_confidence: articulationLowConfidence },
+    },
+  });
+}
+
 beforeEach(() => {
   // jsdom has no object-URL implementation; RawPanel's download flow needs these to exist.
   URL.createObjectURL = vi.fn(() => "blob:mock-url");
@@ -33,13 +46,8 @@ beforeEach(() => {
 });
 
 describe("AnalysisPage", () => {
-  it("renders 8 summary cards with formatted values, with exactly one low-confidence badge", async () => {
-    const detail = analysisDetail("default", {
-      metrics: {
-        ...analysisDetail().metrics,
-        articulation: { ...analysisDetail().metrics.articulation, low_confidence: true },
-      },
-    });
+  it("renders 8 summary cards with formatted values, and 6 low-confidence badges when only recording_quality is low confidence", async () => {
+    const detail = detailWithConfidence(true, false);
     server.use(http.get("/api/analyses/:id", () => HttpResponse.json(detail)));
 
     renderPage();
@@ -55,8 +63,27 @@ describe("AnalysisPage", () => {
     expect(within(cardFor("Fillers per minute")).getByText("18.0")).toHaveClass("num");
     expect(within(cardFor("Eaten words")).getByText("6.3")).toHaveClass("num");
 
-    expect(screen.getAllByText("low confidence")).toHaveLength(1);
-    expect(within(cardFor("Articulation rate")).getByText("low confidence")).toBeInTheDocument();
+    // recording_quality.low_confidence covers every acoustic-metric card (6); Articulation
+    // rate and Eaten words key off articulation.low_confidence instead, which is false here.
+    expect(screen.getAllByText("low confidence")).toHaveLength(6);
+    expect(within(cardFor("Median pitch")).getByText("low confidence")).toBeInTheDocument();
+    expect(within(cardFor("Pitch range")).getByText("low confidence")).toBeInTheDocument();
+    expect(within(cardFor("Flat endings")).getByText("low confidence")).toBeInTheDocument();
+    expect(within(cardFor("Pauses per minute")).getByText("low confidence")).toBeInTheDocument();
+    expect(within(cardFor("Trailing off")).getByText("low confidence")).toBeInTheDocument();
+    expect(within(cardFor("Fillers per minute")).getByText("low confidence")).toBeInTheDocument();
+    expect(within(cardFor("Articulation rate")).queryByText("low confidence")).not.toBeInTheDocument();
+    expect(within(cardFor("Eaten words")).queryByText("low confidence")).not.toBeInTheDocument();
+  });
+
+  it("shows a low-confidence badge on all 8 cards when both recording_quality and articulation are low confidence", async () => {
+    const detail = detailWithConfidence(true, true);
+    server.use(http.get("/api/analyses/:id", () => HttpResponse.json(detail)));
+
+    renderPage();
+
+    expect(await screen.findByText("practice-run.wav")).toBeInTheDocument();
+    expect(screen.getAllByText("low confidence")).toHaveLength(8);
   });
 
   it("shows the quality banner, dashes for every card, and the timeline empty state for too_short", async () => {
