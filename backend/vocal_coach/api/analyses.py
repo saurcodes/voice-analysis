@@ -79,12 +79,15 @@ def _reject_if_declared_too_large(request: Request, max_bytes: int) -> None:
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"declared size exceeds {max_bytes} bytes")
 
 
-def _detail(row) -> AnalysisDetail:
+def to_detail(row) -> AnalysisDetail:
     return AnalysisDetail(id=row.id, file_name=row.file_name, drive_file_id=row.drive_file_id,
                           recorded_at=row.recorded_at, analysed_at=row.analysed_at, analyser_version=row.analyser_version,
                           config_hash=row.config_hash, metrics=row.metrics_json, transcript=row.transcript_json,
                           speaker_context=row.speaker_context, coaching=row.coaching_json,
                           coaching_warnings=row.coaching_warnings)
+
+
+_detail = to_detail  # back-compat alias; api/llm.py imports to_detail directly
 
 
 def _parse_recorded_at(raw) -> datetime:

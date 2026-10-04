@@ -20,12 +20,12 @@ ISS = "http://kc.test/realms/vocal-coach"
 AUD = "vocal-coach-web"
 
 
-def make_test_app(tmp_path: Path, *, job_fn=None, max_upload_mb: int = 500):
+def make_test_app(tmp_path: Path, *, job_fn=None, max_upload_mb: int = 500, cfg=None):
     pem, jwks, kid = make_rsa_jwks()
     settings = Settings(_env_file=None, database_url=f"sqlite+pysqlite:///{tmp_path / 't.db'}",
                         keycloak_issuer=ISS, keycloak_audience=AUD, data_dir=tmp_path / "data",
                         max_upload_mb=max_upload_mb, require_ffmpeg=False, job_workers=1)
-    cfg = load_config()
+    cfg = cfg or load_config()
     engine = make_engine(settings.database_url)
     create_all(engine)
     runner = JobRunner(settings, cfg, executor=SyncExecutor(), job_fn=job_fn)

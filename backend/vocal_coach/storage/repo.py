@@ -176,6 +176,27 @@ def count_source_refs(session: Session, user_id: uuid.UUID, source_sha256: str) 
     return int(analyses) + int(jobs)  # COUNT(*) is never NULL
 
 
+def previous_analysis(
+    session: Session, user_id: uuid.UUID, *, before: datetime, exclude_id: uuid.UUID,
+) -> Analysis | None:
+    """The comparison baseline for coaching: the user's newest analysis with `recorded_at < before`,
+    or — when none exists (e.g. two analyses share the same `recorded_at`) — the newest with
+    `recorded_at == before` that is not `exclude_id`. None when neither exists."""
+    row = session.scalar(
+        select(Analysis).where(Analysis.user_id == user_id, Analysis.recorded_at < before)
+        .order_by(Analysis.recorded_at.desc(), Analysis.id.desc())
+        .execution_options(populate_existing=True)
+    )
+    if row is not None:
+        return row
+    return session.scalar(
+        select(Analysis).where(Analysis.user_id == user_id, Analysis.recorded_at == before,
+                               Analysis.id != exclude_id)
+        .order_by(Analysis.id.desc())
+        .execution_options(populate_existing=True)
+    )
+
+
 def set_speaker_context(session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID, text: str | None) -> Analysis | None:
     row = get_analysis(session, user_id, analysis_id)
     if row is None:

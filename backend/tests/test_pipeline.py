@@ -6,11 +6,20 @@ import pytest
 
 from tests import synth
 from tests.conftest import requires_ffmpeg
+from tests.fake_llm import FakeProvider
 from tests.fake_whisper import FakeWhisper, seg, word
+from vocal_coach.llm.base import LLMError
 from vocal_coach.pipeline import STAGES, JobRequest, run_pipeline
 from vocal_coach.settings import Settings
 from vocal_coach.storage import repo
 from vocal_coach.storage.db import create_all, make_engine, make_session_factory
+
+VALID_COACHING = {
+    "what_improved": ["steady pace"],
+    "what_is_lacking": ["flat intonation"],
+    "next_steps": ["vary pitch on key words"],
+    "marked_up_example": "So yes.",
+}
 
 
 @pytest.fixture
@@ -126,3 +135,70 @@ def test_pipeline_bad_audio_raises_clear_error(cfg, session, tmp_path: Path):
     assert "ffmpeg" in str(e.value).lower() or "audio" in str(e.value).lower()
     assert str(e.value) == "could not decode not_audio.mp3: not a supported audio/video file"
     assert str(tmp_path) not in str(e.value) and "ffprobe" not in str(e.value)
+
+
+def _llm_enabled_cfg(cfg):
+    return cfg.model_copy(update={"llm": cfg.llm.model_copy(update={"enabled": True})})
+
+
+@requires_ffmpeg
+def test_pipeline_runs_coaching_when_llm_enabled(cfg, session, tmp_path: Path):
+    req, user = _req(session, tmp_path)
+    req.llm_enabled = True
+    req.llm_model = "test-model"
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+    seen: list[tuple[str, int]] = []
+    provider = FakeProvider([VALID_COACHING])
+    analysis_id = run_pipeline(req, _llm_enabled_cfg(cfg), settings, session, lambda s, p: seen.append((s, p)),
+                               whisper_model=_fake(), llm_provider=provider)
+    assert [s for s, _ in seen] == list(STAGES)  # stage sequence is unchanged
+    row = repo.get_analysis(session, user.id, analysis_id)
+    assert row.coaching_json == VALID_COACHING
+    assert not row.coaching_warnings
+
+
+@requires_ffmpeg
+def test_pipeline_dedupe_hit_coaches_the_existing_row(cfg, session, tmp_path: Path):
+    req1, user = _req(session, tmp_path, "a.wav")
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+    first = run_pipeline(req1, cfg, settings, session, lambda s, p: None, whisper_model=_fake())
+    assert repo.get_analysis(session, user.id, first).coaching_json is None
+
+    job2 = repo.create_job(session, user.id)
+    req2 = JobRequest(job_id=job2.id, user_id=user.id, source_path=req1.source_path, file_name="a.wav",
+                      recorded_at=req1.recorded_at, llm_enabled=True, llm_model="test-model")
+    provider = FakeProvider([VALID_COACHING])
+    second = run_pipeline(req2, _llm_enabled_cfg(cfg), settings, session, lambda s, p: None,
+                          whisper_model=_fake(), llm_provider=provider)
+
+    assert second == first
+    row = repo.get_analysis(session, user.id, first)
+    assert row.coaching_json == VALID_COACHING
+
+
+@requires_ffmpeg
+def test_pipeline_coaching_failure_still_reaches_done(cfg, session, tmp_path: Path):
+    req, user = _req(session, tmp_path)
+    req.llm_enabled = True
+    req.llm_model = "test-model"
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+    seen: list[tuple[str, int]] = []
+    provider = FakeProvider([LLMError("down")])
+    analysis_id = run_pipeline(req, _llm_enabled_cfg(cfg), settings, session, lambda s, p: seen.append((s, p)),
+                               whisper_model=_fake(), llm_provider=provider)
+    assert seen[-1] == ("done", 100)  # coaching never fails the job
+    row = repo.get_analysis(session, user.id, analysis_id)
+    assert row.coaching_json is None
+    assert row.coaching_warnings == ["coaching failed: down"]
+
+
+@requires_ffmpeg
+def test_pipeline_llm_requested_but_disabled_stores_warning(cfg, session, tmp_path: Path):
+    req, user = _req(session, tmp_path)
+    req.llm_enabled = True
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+    disabled_cfg = cfg.model_copy(update={"llm": cfg.llm.model_copy(update={"enabled": False})})
+    analysis_id = run_pipeline(req, disabled_cfg, settings, session, lambda s, p: None, whisper_model=_fake())
+    row = repo.get_analysis(session, user.id, analysis_id)
+    assert row.coaching_json is None
+    assert row.coaching_warnings == ["coaching is not enabled on this server"]

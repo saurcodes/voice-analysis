@@ -203,6 +203,18 @@ def test_api_timeout_error_maps_to_llm_error_with_connection_error_message(monke
         provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL)
 
 
+def test_other_api_error_maps_to_llm_error(monkeypatch):
+    monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropicClient)
+    provider = AnthropicProvider(_cfg(), _settings())
+    exc = anthropic.APIWebhookValidationError(
+        "x", request=httpx2.Request("POST", "https://example.invalid"), body=None
+    )
+    provider._client.messages = FakeMessages(exception=exc)
+
+    with pytest.raises(LLMError, match="anthropic error: APIWebhookValidationError"):
+        provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL)
+
+
 def test_list_models_sorts_ids(monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropicClient)
     provider = AnthropicProvider(_cfg(), _settings())

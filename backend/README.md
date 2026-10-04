@@ -112,8 +112,9 @@ across threads, and each worker loads the whisper model once. Progress is writte
 `GET /api/jobs/{id}/events`. On restart, unfinished jobs are marked `failed / server restarted`. Run exactly one backend
 process per database (the restart sweep is not multi-process safe).
 
-Endpoints: see `/docs`. Drive (`/api/drive/*`, `source: "drive"`) and coaching (`/api/analyses/{id}/coach`,
-`/api/llm/models`) are stubs until Plans 6–7; `/api/me` reports `llm_enabled: false` until then.
+Endpoints: see `/docs`. Drive (`/api/drive/*`, `source: "drive"`) is a stub until Plan 7. Coaching
+(`/api/analyses/{id}/coach`, `/api/llm/models`, `/api/me`'s `llm_enabled`/`llm_provider`) is wired up; see
+"LLM coaching" below.
 
 Jobs: `GET /api/jobs?status=` lists jobs newest first; `POST /api/jobs/{id}/retry` re-runs a finished job's upload (410
 once the upload has been cleaned up). A worker process that dies (OOM kill, segfault) fails its job with
@@ -134,8 +135,6 @@ once the upload has been cleaned up). A worker process that dies (OOM kill, segf
 
 ### Known gaps
 
-- On a dedupe hit the pipeline returns the existing analysis before the coach stage (it only updates
-  `speaker_context`). Plan 6 should run coaching against the existing row when `llm_enabled` is set.
 - Retry re-uses `file_name`, the upload and `recorded_at`, but not `speaker_context` or the LLM options.
 - Multipart uploads are buffered to a spooled temp file by Starlette before the size backstop runs (Plan 8).
 
@@ -144,3 +143,93 @@ once the upload has been cleaned up). A worker process that dies (OOM kill, segf
 The React UI lives in `frontend/`; see `frontend/README.md` for the dev loop, tests, regenerating
 API types, design tokens, chart colors and the SSE client. `docker compose up -d --build` (above)
 also builds and starts it as the `frontend` service, served by nginx on `http://localhost:3000`.
+
+## LLM coaching (Plan 6)
+
+Deterministic metrics and the transcript become coaching JSON (`what_improved`, `what_is_lacking`,
+`next_steps`, `marked_up_example`) through a provider-agnostic `vocal_coach/llm/` package. Coaching
+never fails a job or a request: a provider error, a timeout, invalid model output or a missing key
+always ends as `coaching: null` plus one or more `coaching_warnings`, and the pipeline still reaches
+`done`.
+
+### Config (`config.yaml`'s `llm` section)
+
+```yaml
+llm:
+  enabled: true                       # master switch; false disables /llm/models, POST /coach and
+                                       # the pipeline's coach stage without touching anything else
+  provider: openai_compatible         # or "anthropic"
+  base_url: http://localhost:11434/v1 # openai_compatible only; ignored by anthropic
+  model: ""                           # default model; empty + openai_compatible = no default (a
+                                       # model must be requested); empty + anthropic defaults to
+                                       # claude-opus-5-5
+  allowed_models: []                  # non-empty allow-lists both /llm/models and the model a
+                                       # caller may request; anything else is rejected
+  seed: 42
+  timeout_s: 120
+  max_output_tokens: 2048
+```
+
+`llm` is not part of `config_hash` (only `analysis` and `articulation` are), so changing it never
+invalidates stored analyses or re-triggers the dedupe check.
+
+### Keys and environment
+
+API keys are never read from `config.yaml` or accepted over the API; they come only from the
+process environment:
+
+- `OPENAI_COMPAT_API_KEY`: optional bearer token sent to the `openai_compatible` provider (omitted
+  entirely when unset, which is normal for a local, unauthenticated server such as Ollama).
+- `ANTHROPIC_API_KEY`: required by the `anthropic` provider; its absence is a clean
+  `coaching failed: ANTHROPIC_API_KEY is not set` warning, not a crash.
+- `LLM_BASE_URL_OVERRIDE`: swaps `llm.base_url` for one value at the process level, for a
+  container that cannot resolve `localhost`. Compose sets this to
+  `http://host.docker.internal:11434/v1` by default (with `extra_hosts: host-gateway` on the
+  backend service) so a backend running in Docker can reach an Ollama running on the host; unset it
+  (`LLM_BASE_URL_OVERRIDE=` in `.env`) to use `config.yaml`'s `base_url` as-is.
+
+### Providers
+
+- **`openai_compatible`** talks to any server exposing the OpenAI chat-completions wire format
+  (Ollama's OpenAI-compatible endpoint, vLLM, LM Studio, …) over `httpx`. It tries strict structured
+  output (`response_format: json_schema`) first and falls back once, on a 4xx, to
+  `response_format: json_object` with the schema spelled out in the system prompt.
+- **`anthropic`** uses the official SDK's structured outputs (`output_config.format`) instead of a
+  forced tool choice, and never sets `temperature`: current Claude models reject both with HTTP 400.
+  Determinism comes from the strict schema, the fixed prompt and the post-checks below.
+
+**Pointing at a local Ollama:** run `ollama serve` and pull a model, then set
+`llm.base_url: http://localhost:11434/v1` (the default) for a backend running directly on the host,
+or rely on compose's `LLM_BASE_URL_OVERRIDE` default for a backend running in a container. Either
+way, `provider: openai_compatible` and `model` (or `allowed_models`) name the pulled model.
+
+### Payload, post-checks and degrade behaviour
+
+The payload sent to a provider drops `per_phrase`, `per_phrase_end_drop_db` and the transcript's
+`words`/`segments`; it caps `long_pauses`, `eaten_words`, `rushed_runs` and `low_conf_words` to 20
+items each; and it includes a `comparison` block (deltas vs. the user's previous analysis by
+`recorded_at`, or `null` with none exists).
+
+Two checks run on every answer and add to `coaching_warnings` without ever discarding the stored
+coaching JSON:
+
+- **Number check**: every number the model cites in `what_improved`, `what_is_lacking`,
+  `next_steps` or `marked_up_example` must trace back to a numeric value in the payload (rendered at
+  0, 1 or 2 decimals, so a re-rounding is accepted but an invented number is flagged).
+- **Markup check**: `marked_up_example`, with `//`/`↘` marks removed and punctuation stripped, must
+  be a contiguous word subsequence of the transcript. With no transcript available, the check is
+  skipped with a `"no transcript available for marked_up_example"` warning instead of failing.
+
+A model's first answer that fails schema validation is retried once with the validation error
+attached; a second failure (or any provider exception: network, auth, HTTP status, timeout) stores
+`coaching: null` and a readable warning, never a stack trace or a URL carrying a key.
+
+### Endpoints
+
+- `GET /api/llm/models` → `{enabled, provider, models}`. `enabled: false` short-circuits to
+  `{enabled: false, provider: null, models: []}` without calling the provider; a provider that
+  cannot list models answers `503`.
+- `GET /api/me` → `llm_enabled` and `llm_provider` (`null` when disabled) mirror `config.yaml`.
+- `POST /api/analyses/{id}/coach` (body: `{speaker_context?, model?}`) re-runs coaching synchronously
+  and returns the updated analysis detail. `404` when the analysis does not exist, `503` when
+  coaching is disabled, `422` when the requested (or configured) model is not in `allowed_models`.

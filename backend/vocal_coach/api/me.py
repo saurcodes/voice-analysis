@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from vocal_coach.auth.deps import CurrentUser, get_current_user
@@ -20,9 +20,9 @@ class MeResponse(BaseModel):
 
 
 @router.get("/me", response_model=MeResponse)
-def me(user: CurrentUser = Depends(get_current_user)):
+def me(request: Request, user: CurrentUser = Depends(get_current_user)):
+    cfg = request.app.state.cfg
     return MeResponse(id=user.id, email=user.email, username=user.username,
                       drive_connected=False,  # Plan 7
-                      # Plan 6 flips this once a provider is wired; keep /me and /llm/models consistent
-                      # (/llm/models reports enabled=False, provider=None until then).
-                      llm_enabled=False, llm_provider=None)
+                      llm_enabled=cfg.llm.enabled,
+                      llm_provider=cfg.llm.provider if cfg.llm.enabled else None)

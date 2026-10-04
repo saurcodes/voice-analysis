@@ -93,7 +93,9 @@ def test_cross_user_is_404_everywhere(tmp_path):
         assert client.delete(f"/api/analyses/{analysis_id}", headers=bob).status_code == 404
         assert client.get("/api/analyses", headers=bob).json() == []
         assert client.post(f"/api/analyses/{analysis_id}/coach", headers=bob).status_code == 404
-        assert client.post(f"/api/analyses/{analysis_id}/coach", headers=ctx["auth"]("alice")).status_code == 501
+        # config.yaml's llm.model is empty and the provider is not anthropic: no default model, so this
+        # is a 422 (no network call); see test_api_llm.py for the enabled/model-resolved paths.
+        assert client.post(f"/api/analyses/{analysis_id}/coach", headers=ctx["auth"]("alice")).status_code == 422
 
 
 def test_delete_removes_row_and_upload_file(tmp_path):

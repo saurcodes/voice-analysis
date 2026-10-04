@@ -25,6 +25,8 @@ from vocal_coach.analysis.schema import SourceInfo
 from vocal_coach.analysis.serialise import to_canonical_json
 from vocal_coach.analysis.tracks import extract_tracks
 from vocal_coach.config import AppConfig, config_hash
+from vocal_coach.llm.base import LLMProvider
+from vocal_coach.llm.service import DISABLED, coach_analysis
 from vocal_coach.settings import Settings
 from vocal_coach.storage import repo
 from vocal_coach.transcription.run import transcribe_file
@@ -60,7 +62,7 @@ def _as_dict(model) -> dict:
 
 def run_pipeline(
     req: JobRequest, cfg: AppConfig, settings: Settings, session: Session, progress: Progress,
-    *, whisper_model: WhisperLike | None = None,
+    *, whisper_model: WhisperLike | None = None, llm_provider: LLMProvider | None = None,
 ) -> uuid.UUID:
     work = settings.data_dir / WORK_SUBDIR / str(req.job_id)
     work.mkdir(parents=True, exist_ok=True)
@@ -80,10 +82,17 @@ def run_pipeline(
 
         existing = repo.find_analysis(session, req.user_id, info.content_sha256, config_hash(cfg), ANALYSER_VERSION)
         if existing is not None:
-            # Dedupe hit: keep the stored analysis. A new speaker context replaces the old one.
-            # NOTE (Plan 6): coaching is skipped here; run it against the existing row when llm_enabled.
+            # Dedupe hit: keep the stored analysis. A new speaker context replaces the old one,
+            # then coaching (if requested) re-runs against the existing row with that context.
             if req.speaker_context and req.speaker_context != existing.speaker_context:
                 repo.set_speaker_context(session, req.user_id, existing.id, req.speaker_context)
+            if req.llm_enabled:
+                if cfg.llm.enabled:
+                    coach_analysis(session, cfg, settings, req.user_id, existing.id, model=req.llm_model,
+                                   speaker_context=req.speaker_context, provider=llm_provider)
+                else:
+                    repo.set_coaching(session, req.user_id, existing.id, speaker_context=existing.speaker_context,
+                                      coaching_json=None, coaching_warnings=[DISABLED])
             progress("done", STAGE_PROGRESS["done"])
             return existing.id
 
@@ -113,7 +122,14 @@ def run_pipeline(
             metrics_json=_as_dict(report), transcript_json=transcript_json, speaker_context=req.speaker_context,
             source_sha256=req.source_sha256,
         )
-        progress("coach", STAGE_PROGRESS["coach"])  # LLM coaching lands in Plan 6
+        progress("coach", STAGE_PROGRESS["coach"])
+        if req.llm_enabled:
+            if cfg.llm.enabled:
+                coach_analysis(session, cfg, settings, req.user_id, row.id, model=req.llm_model,
+                               speaker_context=req.speaker_context, provider=llm_provider)
+            else:
+                repo.set_coaching(session, req.user_id, row.id, speaker_context=row.speaker_context,
+                                  coaching_json=None, coaching_warnings=[DISABLED])
         progress("done", STAGE_PROGRESS["done"])
         return row.id
     finally:

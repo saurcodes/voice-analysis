@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     require_ffmpeg: bool = True
     openai_compat_api_key: str | None = None
     anthropic_api_key: str | None = None
+    # In compose the backend container cannot reach a host-run Ollama at localhost; this override
+    # points the LLM provider's base_url elsewhere (e.g. http://host.docker.internal:11434/v1).
+    llm_base_url_override: str | None = None
 
     @property
     def jwks_url(self) -> str:

@@ -328,6 +328,32 @@ def test_count_source_refs_counts_analyses_and_unfinished_jobs(session):
     assert repo.count_source_refs(session, u.id, src) == 0
 
 
+def test_previous_analysis_returns_newest_earlier_row_scoped_to_user(session):
+    from datetime import timedelta
+
+    u = repo.upsert_user(session, "a", None, None)
+    other = repo.upsert_user(session, "b", None, None)
+    t0 = utcnow()
+    oldest = _mk(session, u, sha="1" * 64, when=t0 - timedelta(days=2))
+    middle = _mk(session, u, sha="2" * 64, when=t0 - timedelta(days=1))
+    newest = _mk(session, u, sha="3" * 64, when=t0)
+    _mk(session, other, sha="4" * 64, when=t0 - timedelta(hours=12))  # other user's row never qualifies
+
+    assert repo.previous_analysis(session, u.id, before=newest.recorded_at, exclude_id=newest.id).id == middle.id
+    assert repo.previous_analysis(session, u.id, before=middle.recorded_at, exclude_id=middle.id).id == oldest.id
+    assert repo.previous_analysis(session, u.id, before=oldest.recorded_at, exclude_id=oldest.id) is None
+
+
+def test_previous_analysis_falls_back_to_same_recorded_at_excluding_self(session):
+    u = repo.upsert_user(session, "a", None, None)
+    when = utcnow()
+    a = _mk(session, u, sha="1" * 64, when=when)
+    b = _mk(session, u, sha="2" * 64, when=when)
+
+    assert repo.previous_analysis(session, u.id, before=when, exclude_id=b.id).id == a.id
+    assert repo.previous_analysis(session, u.id, before=when, exclude_id=a.id).id == b.id
+
+
 def test_set_speaker_context_is_scoped(session):
     u = repo.upsert_user(session, "a", None, None)
     other = repo.upsert_user(session, "b", None, None)

@@ -2,11 +2,19 @@ from fastapi.testclient import TestClient
 
 from tests.api_fixtures import make_test_app
 from tests.auth_keys import mint
+from vocal_coach.config import load_config
 from vocal_coach.storage import repo
 
 
+def _llm_disabled_cfg():
+    """These smoke tests are not about the LLM path; keep it disabled so they stay independent of
+    whatever config.yaml's defaults happen to be (dedicated LLM behaviour is in test_api_llm.py)."""
+    cfg = load_config()
+    return cfg.model_copy(update={"llm": cfg.llm.model_copy(update={"enabled": False})})
+
+
 def test_me_requires_auth_and_upserts_user(tmp_path):
-    app, ctx = make_test_app(tmp_path)
+    app, ctx = make_test_app(tmp_path, cfg=_llm_disabled_cfg())
     with TestClient(app) as client:
         assert client.get("/api/me").status_code == 401
         assert client.get("/api/me", headers={"Authorization": "Bearer nope"}).status_code == 401
@@ -14,7 +22,7 @@ def test_me_requires_auth_and_upserts_user(tmp_path):
         assert r.status_code == 200
         body = r.json()
         assert body["username"] == "user1" and body["drive_connected"] is False
-        assert body["llm_enabled"] is False and body["llm_provider"] is None  # until Plan 6 wires a provider
+        assert body["llm_enabled"] is False and body["llm_provider"] is None
         with ctx["session_factory"]() as s:
             user = repo.upsert_user(s, "sub-42", None, None)  # already exists; id stable
             assert str(user.id) == body["id"]
@@ -28,7 +36,7 @@ def test_account_only_audience_rejected_at_api(tmp_path):
 
 
 def test_config_public_and_llm_stub(tmp_path):
-    app, ctx = make_test_app(tmp_path)
+    app, ctx = make_test_app(tmp_path, cfg=_llm_disabled_cfg())
     with TestClient(app) as client:
         r = client.get("/api/config/public", headers=ctx["auth"]())
         assert r.status_code == 200
@@ -51,7 +59,7 @@ def test_lifespan_fails_stale_jobs(tmp_path):
 
 
 def test_openapi_documents_the_contract_plan5_needs(tmp_path):
-    app, ctx = make_test_app(tmp_path)
+    app, ctx = make_test_app(tmp_path, cfg=_llm_disabled_cfg())
     with TestClient(app) as client:
         spec = client.get("/openapi.json").json()
         upload = spec["paths"]["/api/analyses"]["post"]
@@ -65,7 +73,7 @@ def test_openapi_documents_the_contract_plan5_needs(tmp_path):
             assert name in schemas, name
         assert schemas["JobStatus"]["properties"]["status"]["enum"] == ["queued", "running", "done", "failed"]
         assert "class" in schemas["PhraseContour"]["properties"]  # serialised by alias, as stored
-        assert {"404", "501"} <= set(spec["paths"]["/api/analyses/{analysis_id}/coach"]["post"]["responses"])
+        assert {"404", "422", "503"} <= set(spec["paths"]["/api/analyses/{analysis_id}/coach"]["post"]["responses"])
         assert {"202", "409", "410"} <= set(spec["paths"]["/api/jobs/{job_id}/retry"]["post"]["responses"])
         assert "/api/jobs" in spec["paths"]
         assert client.get("/api/me", headers=ctx["auth"]()).json()["llm_enabled"] is False

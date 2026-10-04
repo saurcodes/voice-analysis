@@ -44,6 +44,8 @@ class AnthropicProvider(LLMProvider):
             raise LLMError(f"anthropic error {e.status_code}") from e
         except anthropic.APIConnectionError as e:  # includes APITimeoutError
             raise LLMError(f"anthropic connection error: {type(e).__name__}") from e
+        except anthropic.APIError as e:  # catch-all for any other SDK failure mode
+            raise LLMError(f"anthropic error: {type(e).__name__}") from e
 
         if response.stop_reason == "refusal":
             raise LLMError("anthropic declined the request")
