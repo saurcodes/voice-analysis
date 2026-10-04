@@ -9,7 +9,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from vocal_coach.auth.jwt import AuthError, verify_token
+from vocal_coach.auth.jwt import AuthError, JWKSUnavailable, verify_token
 from vocal_coach.storage import repo
 
 bearer = HTTPBearer(auto_error=False)
@@ -39,6 +39,8 @@ def get_current_user(
     try:
         claims = verify_token(credentials.credentials, issuer=settings.keycloak_issuer,
                               audience=settings.keycloak_audience, jwks=request.app.state.jwks)
+    except JWKSUnavailable:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "authentication service unavailable")
     except AuthError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid token: {e}", headers={"WWW-Authenticate": "Bearer"})
     user = repo.upsert_user(session, claims["sub"], claims.get("email"), claims.get("preferred_username"))

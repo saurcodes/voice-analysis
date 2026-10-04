@@ -18,6 +18,10 @@ class AuthError(Exception):
     pass
 
 
+class JWKSUnavailable(AuthError):
+    """The identity provider's JWKS endpoint could not be reached (IdP outage, not a bad token)."""
+
+
 def fetch_jwks(url: str) -> dict:
     response = httpx.get(url, timeout=JWKS_HTTP_TIMEOUT_S)
     response.raise_for_status()
@@ -36,17 +40,24 @@ class JWKSCache:
 
     def refresh(self) -> None:
         with self._lock:
+            self._refresh_locked()
+
+    def _refresh_locked(self) -> None:
+        try:
             data = self._fetch(self._url)
-            self._keys = {k["kid"]: PyJWK(k) for k in data.get("keys", []) if "kid" in k}
-            self._last_refresh = time.monotonic()
+        except httpx.HTTPError as e:
+            raise JWKSUnavailable(f"could not fetch JWKS: {e}") from e
+        self._keys = {k["kid"]: PyJWK(k) for k in data.get("keys", []) if "kid" in k}
+        self._last_refresh = time.monotonic()
 
     def key_for(self, kid: str) -> PyJWK:
-        if kid not in self._keys and (time.monotonic() - self._last_refresh) >= self._min_interval:
-            self.refresh()
-        try:
-            return self._keys[kid]
-        except KeyError:
-            raise AuthError(f"unknown signing key {kid!r}") from None
+        with self._lock:
+            if kid not in self._keys and (time.monotonic() - self._last_refresh) >= self._min_interval:
+                self._refresh_locked()
+            key = self._keys.get(kid)
+        if key is None:
+            raise AuthError(f"unknown signing key {kid!r}")
+        return key
 
 
 def verify_token(token: str, *, issuer: str, audience: str, jwks: JWKSCache) -> dict:

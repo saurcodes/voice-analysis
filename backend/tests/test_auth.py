@@ -1,7 +1,10 @@
+import threading
+
+import httpx
 import pytest
 
 from tests.auth_keys import make_rsa_jwks, mint
-from vocal_coach.auth.jwt import AuthError, JWKSCache, verify_token
+from vocal_coach.auth.jwt import AuthError, JWKSCache, JWKSUnavailable, verify_token
 
 ISS = "http://kc.test/realms/vocal-coach"
 AUD = "vocal-coach-web"
@@ -61,3 +64,46 @@ def test_garbage_token_is_auth_error(keys):
     _, _, cache, _ = keys
     with pytest.raises(AuthError):
         verify_token("not.a.jwt", issuer=ISS, audience=AUD, jwks=cache)
+
+
+def test_concurrent_unknown_kid_fetches_once():
+    _, jwks, _ = make_rsa_jwks()
+    calls = {"n": 0}
+    lock = threading.Lock()
+
+    def counting_fetch(url):
+        with lock:
+            calls["n"] += 1
+        return jwks
+
+    cache = JWKSCache("http://kc.test/jwks", fetch=counting_fetch, min_refresh_interval_s=60.0)
+
+    errors = []
+
+    def worker():
+        try:
+            cache.key_for("missing")
+        except AuthError:
+            errors.append(True)
+        except Exception:
+            pass
+
+    threads = [threading.Thread(target=worker) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(errors) == 10
+    assert calls["n"] == 1
+
+
+def test_jwks_fetch_failure_raises_jwks_unavailable(keys):
+    pem, kid, _, _ = keys
+
+    def failing_fetch(url):
+        raise httpx.ConnectError("boom")
+
+    cache = JWKSCache("http://kc.test/jwks", fetch=failing_fetch, min_refresh_interval_s=0.0)
+    with pytest.raises(JWKSUnavailable):
+        verify_token(mint(pem, kid, iss=ISS, aud=AUD), issuer=ISS, audience=AUD, jwks=cache)
