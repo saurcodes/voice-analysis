@@ -60,6 +60,8 @@ class OpenAICompatibleProvider(LLMProvider):
             raise LLMError(f"openai-compatible error {e.response.status_code}") from None
         except (httpx.TimeoutException, httpx.TransportError) as e:
             raise LLMError(f"openai-compatible connection error: {type(e).__name__}") from None
+        except json.JSONDecodeError:
+            raise LLMError("openai-compatible returned a malformed response") from None
         try:
             return sorted(m["id"] for m in data["data"])
         except (KeyError, TypeError):
@@ -108,7 +110,10 @@ class OpenAICompatibleProvider(LLMProvider):
             response.raise_for_status()
         except (httpx.TimeoutException, httpx.TransportError) as e:
             raise LLMError(f"openai-compatible connection error: {type(e).__name__}") from None
-        return response.json()
+        try:
+            return response.json()
+        except json.JSONDecodeError:
+            raise LLMError("openai-compatible returned a malformed response") from None
 
     def _parse_content(self, data: dict) -> dict:
         try:

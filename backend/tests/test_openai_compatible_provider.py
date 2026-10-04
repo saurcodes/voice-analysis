@@ -184,3 +184,30 @@ def test_timeout_raises_llm_error_with_connection_error_message(httpx_mock):
     provider = OpenAICompatibleProvider(_cfg(), _settings())
     with pytest.raises(LLMError, match="connection error"):
         provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL)
+
+
+def test_malformed_2xx_body_raises_llm_error_instead_of_json_decode_error(httpx_mock):
+    httpx_mock.add_response(status_code=200, url=CHAT_URL, method="POST", text="{not valid json")
+
+    provider = OpenAICompatibleProvider(_cfg(), _settings())
+    with pytest.raises(LLMError, match="openai-compatible returned a malformed response"):
+        provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL)
+
+
+def test_list_models_malformed_body_raises_llm_error_instead_of_json_decode_error(httpx_mock):
+    httpx_mock.add_response(status_code=200, url=MODELS_URL, method="GET", text="{not valid json")
+
+    provider = OpenAICompatibleProvider(_cfg(), _settings())
+    with pytest.raises(LLMError, match="openai-compatible returned a malformed response"):
+        provider.list_models()
+
+
+def test_timeout_on_fallback_request_raises_llm_error(httpx_mock):
+    httpx_mock.add_response(**_chat_response("", status_code=400))
+    httpx_mock.add_exception(httpx.ReadTimeout("t"), url=CHAT_URL, method="POST")
+
+    provider = OpenAICompatibleProvider(_cfg(), _settings())
+    with pytest.raises(LLMError, match="connection error"):
+        provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL)
+
+    assert len(httpx_mock.get_requests()) == 2
