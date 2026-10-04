@@ -49,7 +49,7 @@ class JWKSCache:
         self._fetch = fetch or fetch_jwks
         self._min_interval = min_refresh_interval_s
         self._keys: dict[str, PyJWK] = {}
-        self._last_refresh = 0.0
+        self._last_refresh = float("-inf")  # never refreshed: the first unknown kid always fetches, even right after boot
         self._lock = threading.Lock()
 
     def refresh(self) -> None:
@@ -61,6 +61,8 @@ class JWKSCache:
             data = self._fetch(self._url)
         except httpx.HTTPError as e:
             raise JWKSUnavailable(f"could not fetch JWKS: {e}") from e
+        except ValueError as e:  # the endpoint answered with something that is not JSON (proxy error page, etc.)
+            raise JWKSUnavailable(f"JWKS response is not valid JSON: {e}") from e
         self._keys = _signing_keys(data)
         self._last_refresh = time.monotonic()
 

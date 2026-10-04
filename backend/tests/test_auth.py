@@ -120,3 +120,31 @@ def test_encryption_keys_in_jwks_are_ignored():
     assert claims["sub"] == "user-1"
     with pytest.raises(AuthError, match="unknown signing key"):
         cache.key_for("enc-key")
+
+
+def test_first_lookup_fetches_even_right_after_boot(monkeypatch):
+    """time.monotonic() can be under the refresh interval in a fresh container; the first lookup must still fetch."""
+    from vocal_coach.auth import jwt as jwt_mod
+
+    pem, jwks, kid = make_rsa_jwks()
+    calls = {"n": 0}
+
+    def fetch(url):
+        calls["n"] += 1
+        return jwks
+
+    monkeypatch.setattr(jwt_mod.time, "monotonic", lambda: 5.0)
+    cache = JWKSCache("http://kc.test/jwks", fetch=fetch)  # default 60 s minimum refresh interval
+    claims = verify_token(mint(pem, kid, iss=ISS, aud=AUD), issuer=ISS, audience=AUD, jwks=cache)
+    assert claims["sub"] == "user-1" and calls["n"] == 1
+
+
+def test_non_json_jwks_response_is_jwks_unavailable():
+    import json
+
+    def fetch(url):
+        return json.loads("<html>bad gateway</html>")
+
+    cache = JWKSCache("http://kc.test/jwks", fetch=fetch, min_refresh_interval_s=0.0)
+    with pytest.raises(JWKSUnavailable, match="not valid JSON"):
+        cache.key_for("any")
