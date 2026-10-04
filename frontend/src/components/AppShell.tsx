@@ -2,8 +2,9 @@ import type { ReactNode } from "react";
 import { NavLink } from "react-router";
 import { Monitor, Moon, Sun } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
-import { UserMenu } from "@/components/UserMenu";
-import { useTheme, type Theme } from "@/lib/theme";
+import { UserMenu } from "@/auth/UserMenu";
+import type { Theme } from "@/lib/theme";
+import { useTheme } from "@/lib/use-theme";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
@@ -24,7 +25,8 @@ const THEME_ICON: Record<Theme, typeof Sun> = {
   dark: Moon,
 };
 
-function ThemeToggle() {
+/** Cycles system -> light -> dark -> system. Reused as-is in SettingsPage's Theme section. */
+export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
   const Icon = THEME_ICON[theme];
 

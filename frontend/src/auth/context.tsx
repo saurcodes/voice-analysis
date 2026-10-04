@@ -14,8 +14,15 @@ export interface AuthState {
   signout: () => Promise<void>;
 }
 
-// Placeholder for Task 1 / Task 2 wiring. Task 2 replaces the provider's implementation
-// with real Keycloak OIDC (oidc-client-ts + react-oidc-context) behind this same shape.
+/**
+ * Seconds of remaining access-token lifetime below which getToken() forces a silent
+ * renew before handing back a token. Keycloak access tokens last 300s.
+ */
+export const TOKEN_SKEW_S = 20;
+
+// Real implementation lives in src/auth/AuthProvider.tsx (kept in a separate file so this
+// module only exports the context/hook, not a component; see src/lib/use-theme.ts for the
+// same split applied to ThemeProvider/useTheme).
 export const AuthContext = createContext<AuthState | null>(null);
 
 export function useAuthState(): AuthState {

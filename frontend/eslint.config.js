@@ -22,4 +22,14 @@ export default tseslint.config(
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
     },
   },
+  {
+    // shadcn/ui convention: these files export a component alongside its cva() variants
+    // function (e.g. `buttonVariants`), which Fast Refresh's export-shape check flags but
+    // which is how every shadcn component is generated. Owned and customised per the visual
+    // contract; just exempt the file shape.
+    files: ["src/components/ui/**/*.{ts,tsx}"],
+    rules: {
+      "react-refresh/only-export-components": "off",
+    },
+  },
 );

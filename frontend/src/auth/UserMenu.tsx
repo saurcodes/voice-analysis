@@ -1,10 +1,8 @@
+import { SignOut } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
-import { useAuthState } from "@/auth/context";
+import { useAuthState } from "./context";
 
-/**
- * Minimal user menu slot for Task 1. Task 2 replaces this with a real dropdown
- * (account info, Drive connect state, sign out) once Keycloak is wired in.
- */
+/** Mounted in the AppShell header: shows the signed-in user's name and a sign-out action. */
 export function UserMenu() {
   const { isAuthenticated, user, signin, signout } = useAuthState();
 
@@ -19,8 +17,14 @@ export function UserMenu() {
   return (
     <div className="flex items-center gap-3">
       <span className="text-sm text-muted-foreground">{user.name}</span>
-      <Button variant="ghost" size="sm" onClick={() => void signout()}>
-        Sign out
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label="Sign out"
+        onClick={() => void signout()}
+      >
+        <SignOut weight="regular" className="size-5" />
       </Button>
     </div>
   );
