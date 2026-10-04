@@ -33,6 +33,28 @@ test("no ids at all also shows the instruction state", () => {
   ).toBeInTheDocument();
 });
 
+test("a single id never issues a GET /api/comparisons request", async () => {
+  const comparisonsSpy = vi.fn();
+  server.use(
+    http.get("/api/comparisons", () => {
+      comparisonsSpy();
+      return HttpResponse.json(comparison());
+    }),
+  );
+
+  renderPage("/compare?ids=a1a1a1a1-0000-4000-8000-000000000001");
+
+  expect(
+    screen.getByText("Select two or more recordings in the Library to compare them."),
+  ).toBeInTheDocument();
+
+  // useComparison's `enabled: ids.length >= 2` means the query never starts for a single id,
+  // so this isn't a timing race; flush a tick anyway so a regression that *did* fire a
+  // request would still be caught.
+  await Promise.resolve();
+  expect(comparisonsSpy).not.toHaveBeenCalled();
+});
+
 test("two ids loads the comparison: mismatch banner, grouped table, and default 4 trend charts", async () => {
   const data = comparison();
   server.use(http.get("/api/analyses", () => HttpResponse.json([summary(), summary({ id: data.analysis_ids[1] })])));

@@ -115,13 +115,15 @@ export function useAnalysis(id: string) {
   });
 }
 
+/** The backend needs at least two ids to compare; a single id (or none) would just get a
+ * rejected request, so the query stays disabled until there are 2+. */
 export function useComparison(ids: string[]) {
   const api = useApi();
   return useQuery({
     queryKey: ["vc", "comparison", ids] as const,
     queryFn: () =>
       api.get<ComparisonResult>(`/api/comparisons?ids=${encodeURIComponent(ids.join(","))}`),
-    enabled: ids.length > 0,
+    enabled: ids.length >= 2,
   });
 }
 

@@ -7,12 +7,8 @@ import { MismatchBanners } from "@/components/compare/MismatchBanners";
 import { TrendCharts } from "@/components/compare/TrendCharts";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { chartSlots } from "@/lib/compare";
 import { formatDateTime } from "@/lib/dates";
-
-/** Fixed categorical slots, assigned in order, never cycled (dataviz color-formula.md). Mirrors
- * TrendCharts' own CHART_COLORS so the header swatch matches the chart that recording appears
- * in. */
-const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)"];
 
 function errorDetail(error: unknown): string {
   if (error instanceof ApiError && typeof error.detail === "string") return error.detail;
@@ -50,20 +46,12 @@ function TableSkeleton() {
 }
 
 /** Returns a color per analysis_id for the ids that will actually appear in TrendCharts (the
- * <=3 most recent, by recorded_at), in chronological slot order - see the ruling in
- * TrendCharts.tsx's pickChartRecordings(). Ids outside that set (when there are >3 recordings)
- * get no swatch, since they are not plotted in any chart. */
+ * <=3 most recent, by recorded_at), via the shared chartSlots() helper so the header swatch
+ * always matches the chart that recording appears in. Ids outside that set (when there are
+ * >3 recordings) get no swatch, since they are not plotted in any chart. */
 function chartColorsById(ids: string[], recordedAt: string[]): Record<string, string> {
-  const all = ids.map((id, i) => ({ id, recordedAt: recordedAt[i] }));
-  const mostRecentFirst = [...all].sort((a, b) => Date.parse(b.recordedAt) - Date.parse(a.recordedAt));
-  const chartedIds = new Set(mostRecentFirst.slice(0, 3).map((r) => r.id));
-  const chronological = mostRecentFirst
-    .filter((r) => chartedIds.has(r.id))
-    .sort((a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt));
   const colors: Record<string, string> = {};
-  chronological.forEach((r, i) => {
-    colors[r.id] = CHART_COLORS[i];
-  });
+  for (const slot of chartSlots(ids, recordedAt)) colors[slot.id] = slot.color;
   return colors;
 }
 

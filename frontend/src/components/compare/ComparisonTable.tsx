@@ -161,9 +161,7 @@ export function ComparisonTable({
           <TableRow>
             <TableHead>Metric</TableHead>
             {comparison.analysis_ids.map((id, i) => (
-              <TableHead key={id} className="num">
-                {recordingNames[i]}
-              </TableHead>
+              <TableHead key={id}>{recordingNames[i]}</TableHead>
             ))}
             <TableHead>Change</TableHead>
           </TableRow>

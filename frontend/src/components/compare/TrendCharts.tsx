@@ -12,6 +12,7 @@ import {
   type TooltipContentProps,
 } from "recharts";
 import type { components } from "@/api/types";
+import { chartSlots } from "@/lib/compare";
 import { formatMetricValue, METRIC_LABELS, type MetricLabel } from "@/lib/metrics";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -20,8 +21,6 @@ import { PathPicker } from "./PathPicker";
 type ComparisonResult = components["schemas"]["ComparisonResult"];
 type TrendPoint = components["schemas"]["TrendPoint"];
 
-/** Fixed categorical slots, assigned in order, never cycled (dataviz color-formula.md). */
-const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)"];
 const AXIS_TICK = { fill: "var(--muted-foreground)", fontSize: 11 };
 const dayMonthFormat = new Intl.DateTimeFormat("en", { day: "numeric", month: "short" });
 
@@ -49,24 +48,19 @@ interface ChartPoint {
   color: string;
 }
 
-/** Picks the <=3 most recent recordings (by recorded_at) and returns them in chronological
- * order with slot colours assigned chart-1..3 in that order, per the controller ruling:
- * "slot colours follow the chart's 3 recordings in chronological order." */
+/** Resolves the shared chartSlots() output (id/recordedAt/slot/color) to the recording names
+ * this component needs for its legend and tooltip, via the names map passed down from
+ * ComparePage. */
 function pickChartRecordings(
   ids: string[],
   recordedAt: string[],
   names: Record<string, string>,
 ): ChartRecording[] {
-  const all = ids.map((id, i) => ({ id, recordedAt: recordedAt[i] }));
-  const mostRecentFirst = [...all].sort(
-    (a, b) => Date.parse(b.recordedAt) - Date.parse(a.recordedAt),
-  );
-  const chosen = mostRecentFirst.slice(0, 3);
-  const chronological = chosen.sort((a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt));
-  return chronological.map((r, i) => ({
-    ...r,
-    name: names[r.id] ?? r.id.slice(0, 8),
-    color: CHART_COLORS[i],
+  return chartSlots(ids, recordedAt).map((slot) => ({
+    id: slot.id,
+    recordedAt: slot.recordedAt,
+    name: names[slot.id] ?? slot.id.slice(0, 8),
+    color: slot.color,
   }));
 }
 
@@ -161,9 +155,7 @@ function TrendTable({
         <TableRow>
           <TableHead>Metric</TableHead>
           {chartRecordings.map((r) => (
-            <TableHead key={r.id} className="num">
-              {r.name}
-            </TableHead>
+            <TableHead key={r.id}>{r.name}</TableHead>
           ))}
         </TableRow>
       </TableHeader>
