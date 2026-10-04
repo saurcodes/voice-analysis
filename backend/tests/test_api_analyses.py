@@ -3,10 +3,14 @@ import json
 import uuid
 from datetime import datetime, timezone
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.requests import Request as StarletteRequest
 
 from tests import synth
 from tests.api_fixtures import make_test_app
+from vocal_coach.api.analyses import _download_filename, _reject_if_declared_too_large
 from vocal_coach.storage import repo
 from vocal_coach.storage.db import make_engine, make_session_factory
 
@@ -126,3 +130,45 @@ def test_list_pagination(tmp_path):
         assert len(client.get("/api/analyses?limit=2", headers=ctx["auth"]()).json()) == 2
         assert len(client.get("/api/analyses?limit=2&offset=2", headers=ctx["auth"]()).json()) == 1
         assert client.get("/api/analyses?limit=0", headers=ctx["auth"]()).status_code == 422
+
+
+def test_download_filename_sanitises_quotes_and_crlf():
+    assert _download_filename('evil"na\r\nme', "metrics") == "evil_na__me.metrics.json"
+
+
+def test_download_filename_empty_stem_falls_back_to_analysis():
+    assert _download_filename("", "transcript") == "analysis.transcript.json"
+
+
+def test_download_filename_is_truncated():
+    assert _download_filename("a" * 500, "coaching") == ("a" * 100) + ".coaching.json"
+
+
+def test_raw_download_filename_header_has_no_injected_quote_or_crlf(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        job_id = _upload(client, ctx["auth"](), name='we ird"name.wav').json()["job_ids"][0]
+        analysis_id = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).json()["analysis_id"]
+        raw = client.get(f"/api/analyses/{analysis_id}/raw/metrics", headers=ctx["auth"]())
+        assert raw.status_code == 200
+        cd = raw.headers["content-disposition"]
+        assert cd.count('"') == 2  # only the two delimiters around the filename value
+        filename_value = cd.split('filename="', 1)[1].rstrip('"')
+        assert '"' not in filename_value and "\r" not in filename_value and "\n" not in filename_value
+
+
+def test_reject_if_declared_too_large_raises_413_without_reading_body():
+    req = StarletteRequest({"type": "http", "headers": [(b"content-length", b"999999999")]})
+    with pytest.raises(HTTPException) as exc_info:
+        _reject_if_declared_too_large(req, max_bytes=1000)
+    assert exc_info.value.status_code == 413
+
+
+def test_reject_if_declared_too_large_ignores_non_numeric_header():
+    req = StarletteRequest({"type": "http", "headers": [(b"content-length", b"not-a-number")]})
+    _reject_if_declared_too_large(req, max_bytes=1000)  # must not raise
+
+
+def test_reject_if_declared_too_large_ignores_missing_header():
+    req = StarletteRequest({"type": "http", "headers": []})
+    _reject_if_declared_too_large(req, max_bytes=1000)  # must not raise

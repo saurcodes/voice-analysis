@@ -1,8 +1,16 @@
-"""Upload, list, detail, raw download and delete for a user's analyses."""
+"""Upload, list, detail, raw download and delete for a user's analyses.
+
+NOTE: `Content-Length` is checked before `request.form()` so a declared-oversized upload is
+rejected without reading the body, and the post-parse byte count in `_store_upload` remains the
+backstop for chunked requests with no `Content-Length`. Starlette's `request.form()` still
+buffers the whole multipart body to a spooled temp file before we ever see it, so this is not
+true incremental/streaming multipart parsing — that's follow-up hardening (ledgered for Plan 8).
+"""
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +33,8 @@ UPLOAD_CHUNK_BYTES = 1024 * 1024
 UPLOADS_SUBDIR = "uploads"
 RAW_KINDS = ("metrics", "transcript", "coaching")
 LIST_LIMIT_MIN, LIST_LIMIT_MAX, LIST_LIMIT_DEFAULT = 1, 200, repo.SUMMARY_PAGE_SIZE
+SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
+MAX_DOWNLOAD_STEM = 100  # keep Content-Disposition short and ASCII
 
 
 class JobIds(BaseModel):
@@ -44,6 +54,27 @@ class AnalysisDetail(BaseModel):
     speaker_context: str | None
     coaching: dict | None
     coaching_warnings: list | None
+
+
+def _download_filename(stem: str, kind: str) -> str:
+    """ASCII-safe `Content-Disposition` filename: no quotes, no CR/LF, no header injection."""
+    safe_stem = SAFE_FILENAME_RE.sub("_", stem)[:MAX_DOWNLOAD_STEM] or "analysis"
+    return f"{safe_stem}.{kind}.json"
+
+
+def _reject_if_declared_too_large(request: Request, max_bytes: int) -> None:
+    """413 before touching the body when `Content-Length` already declares an oversized upload.
+
+    A non-numeric or absent header is ignored; the post-parse size check is the backstop."""
+    declared = request.headers.get("content-length")
+    if declared is None:
+        return
+    try:
+        declared_bytes = int(declared)
+    except ValueError:
+        return
+    if declared_bytes > max_bytes:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"declared size exceeds {max_bytes} bytes")
 
 
 def _detail(row) -> AnalysisDetail:
@@ -97,6 +128,7 @@ async def create_analysis(
     if content_type.startswith("application/json"):
         # JSON body (Drive source) — Plan 7
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "drive is not available yet")
+    _reject_if_declared_too_large(request, request.app.state.settings.max_upload_bytes)
     async with request.form() as form:  # closes the UploadFile's spooled temp file on exit, even on error
         file = form.get("file")
         if not isinstance(file, StarletteUploadFile):
@@ -146,9 +178,9 @@ def get_raw(analysis_id: uuid.UUID, kind: str, user: CurrentUser = Depends(get_c
     if payload is None:
         raise HTTPException(404, f"no {kind} for this analysis")
     body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)  # JSONB reorders keys
-    stem = Path(row.file_name).stem
+    filename = _download_filename(Path(row.file_name).stem, kind)
     return RawResponse(body, media_type="application/json",
-                       headers={"Content-Disposition": f'attachment; filename="{stem}.{kind}.json"'})
+                       headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @router.delete("/analyses/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT)
