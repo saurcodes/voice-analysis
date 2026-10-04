@@ -230,6 +230,6 @@ def delete_analysis(analysis_id: uuid.UUID, request: Request, user: CurrentUser 
         raise HTTPException(404, "analysis not found")
     source_sha = row.source_sha256  # the upload's name; content_sha256 is the extracted WAV's hash
     repo.delete_analysis(session, user.id, analysis_id)
-    if source_sha and repo.count_source_refs(session, user.id, source_sha) == 0:
+    if source_sha and not repo.count_source_refs(session, user.id, source_sha):
         paths.remove_upload(request.app.state.settings.data_dir, user.id, source_sha)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -23,6 +23,10 @@ def find_uploads(data_dir: Path, user_id: uuid.UUID, source_sha256: str) -> list
     return sorted(uploads_dir(data_dir, user_id).glob(f"{source_sha256}.*"))
 
 
+def find_upload(data_dir: Path, user_id: uuid.UUID, source_sha256: str) -> Path | None:
+    return next(iter(find_uploads(data_dir, user_id, source_sha256)), None)
+
+
 def remove_upload(data_dir: Path, user_id: uuid.UUID, source_sha256: str) -> list[Path]:
     removed = find_uploads(data_dir, user_id, source_sha256)
     for path in removed:

@@ -25,7 +25,8 @@ def list_models(_user: CurrentUser = Depends(get_current_user)) -> LlmModels:
 
 
 @router.post("/analyses/{analysis_id}/coach",
-             responses={404: {"description": "analysis not found"}, 501: {"description": "coaching is not available yet"}})
+             responses={status.HTTP_404_NOT_FOUND: {"description": "analysis not found"},
+                        status.HTTP_501_NOT_IMPLEMENTED: {"description": "coaching is not available yet"}})
 def coach(analysis_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), session: Session = Depends(get_session)):
     if repo.get_analysis(session, user.id, analysis_id) is None:
         raise HTTPException(404, "analysis not found")

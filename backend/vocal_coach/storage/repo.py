@@ -173,7 +173,7 @@ def count_source_refs(session: Session, user_id: uuid.UUID, source_sha256: str) 
         Analysis.user_id == user_id, Analysis.source_sha256 == source_sha256))
     jobs = session.scalar(select(func.count()).select_from(Job).where(
         Job.user_id == user_id, Job.source_sha256 == source_sha256, Job.status.not_in(TERMINAL_STATUSES)))
-    return int(analyses or 0) + int(jobs or 0)
+    return int(analyses) + int(jobs)  # COUNT(*) is never NULL
 
 
 def set_speaker_context(session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID, text: str | None) -> Analysis | None:

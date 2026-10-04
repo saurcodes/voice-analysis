@@ -71,22 +71,23 @@ def get_job(job_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), se
 
 
 @router.post("/jobs/{job_id}/retry", status_code=status.HTTP_202_ACCEPTED, response_model=JobId,
-             responses={404: {"description": "job not found"}, 409: {"description": "job is not finished"},
-                        410: {"description": "the uploaded file is no longer stored"},
-                        503: {"description": "job runner unavailable"}})
+             responses={status.HTTP_404_NOT_FOUND: {"description": "job not found"},
+                        status.HTTP_409_CONFLICT: {"description": "job is not finished"},
+                        status.HTTP_410_GONE: {"description": "the uploaded file is no longer stored"},
+                        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "job runner unavailable"}})
 def retry_job(job_id: uuid.UUID, request: Request, user: CurrentUser = Depends(get_current_user),
               session: Session = Depends(get_session)):
     job = repo.get_job(session, user.id, job_id)
     if job is None:
-        raise HTTPException(404, "job not found")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
     if job.status not in repo.TERMINAL_STATUSES:
         raise HTTPException(status.HTTP_409_CONFLICT, "job is not finished")
-    found = paths.find_uploads(request.app.state.settings.data_dir, user.id, job.source_sha256) if job.source_sha256 else []
-    if not found:
+    found = paths.find_upload(request.app.state.settings.data_dir, user.id, job.source_sha256) if job.source_sha256 else None
+    if found is None:
         raise HTTPException(status.HTTP_410_GONE, "the uploaded file is no longer stored; upload it again")
     new = repo.create_job(session, user.id, file_name=job.file_name, source_sha256=job.source_sha256,
                           recorded_at=job.recorded_at)
-    req = JobRequest(job_id=new.id, user_id=user.id, source_path=found[0], file_name=job.file_name or found[0].name,
+    req = JobRequest(job_id=new.id, user_id=user.id, source_path=found, file_name=job.file_name or found.name,
                      recorded_at=job.recorded_at or datetime.now(timezone.utc), source_sha256=job.source_sha256)
     submit_or_503(request, session, new.id, req)
     return JobId(job_id=new.id)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from vocal_coach.auth.deps import CurrentUser, get_current_user, get_session
@@ -24,7 +24,7 @@ def _parse_ids(raw: str) -> list[uuid.UUID]:
     if len(unique) < MIN_IDS:
         raise HTTPException(400, f"need at least {MIN_IDS} distinct ids")
     if len(unique) > MAX_COMPARE_IDS:
-        raise HTTPException(400, f"at most {MAX_COMPARE_IDS} ids per comparison")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"at most {MAX_COMPARE_IDS} ids per comparison")
     return unique
 
 

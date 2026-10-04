@@ -180,7 +180,7 @@ def _release_upload(session, settings: Settings, req: JobRequest) -> None:
     if not req.source_sha256:
         return
     try:
-        if _repo.count_source_refs(session, req.user_id, req.source_sha256) == 0:
+        if not _repo.count_source_refs(session, req.user_id, req.source_sha256):
             removed = remove_upload(settings.data_dir, req.user_id, req.source_sha256)
             log.info("job %s: removed unreferenced upload %s", req.job_id, [p.name for p in removed])
     except Exception:  # cleanup is best effort; the job outcome is already recorded
