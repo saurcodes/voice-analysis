@@ -60,6 +60,25 @@ def _as_dict(model) -> dict:
     return json.loads(to_canonical_json(model))
 
 
+def _coach_stage(
+    req: JobRequest, cfg: AppConfig, settings: Settings, session: Session, analysis_id: uuid.UUID,
+    stored_context: str | None, llm_provider: LLMProvider | None,
+) -> None:
+    """Coach one stored analysis. Never raises: the analysis is already stored, so any failure here
+    (including a DB error while saving the coaching) is logged and the job still reaches `done`."""
+    try:
+        if cfg.llm.enabled:
+            coach_analysis(session, cfg, settings, req.user_id, analysis_id, model=req.llm_model,
+                           speaker_context=req.speaker_context, provider=llm_provider)
+        else:
+            repo.set_coaching(session, req.user_id, analysis_id, speaker_context=stored_context,
+                              coaching_json=None, coaching_warnings=[DISABLED])
+    except Exception as e:
+        log.warning("job %s: coach stage failed (%s); analysis %s kept without coaching",
+                    req.job_id, type(e).__name__, analysis_id)
+        session.rollback()  # leave the session usable for the remaining job updates
+
+
 def run_pipeline(
     req: JobRequest, cfg: AppConfig, settings: Settings, session: Session, progress: Progress,
     *, whisper_model: WhisperLike | None = None, llm_provider: LLMProvider | None = None,
@@ -88,12 +107,7 @@ def run_pipeline(
                 repo.set_speaker_context(session, req.user_id, existing.id, req.speaker_context)
             progress("coach", STAGE_PROGRESS["coach"])
             if req.llm_enabled:
-                if cfg.llm.enabled:
-                    coach_analysis(session, cfg, settings, req.user_id, existing.id, model=req.llm_model,
-                                   speaker_context=req.speaker_context, provider=llm_provider)
-                else:
-                    repo.set_coaching(session, req.user_id, existing.id, speaker_context=existing.speaker_context,
-                                      coaching_json=None, coaching_warnings=[DISABLED])
+                _coach_stage(req, cfg, settings, session, existing.id, existing.speaker_context, llm_provider)
             progress("done", STAGE_PROGRESS["done"])
             return existing.id
 
@@ -125,12 +139,7 @@ def run_pipeline(
         )
         progress("coach", STAGE_PROGRESS["coach"])
         if req.llm_enabled:
-            if cfg.llm.enabled:
-                coach_analysis(session, cfg, settings, req.user_id, row.id, model=req.llm_model,
-                               speaker_context=req.speaker_context, provider=llm_provider)
-            else:
-                repo.set_coaching(session, req.user_id, row.id, speaker_context=row.speaker_context,
-                                  coaching_json=None, coaching_warnings=[DISABLED])
+            _coach_stage(req, cfg, settings, session, row.id, row.speaker_context, llm_provider)
         progress("done", STAGE_PROGRESS["done"])
         return row.id
     finally:

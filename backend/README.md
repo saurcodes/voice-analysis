@@ -166,8 +166,10 @@ llm:
   allowed_models: []                  # non-empty allow-lists both /llm/models and the model a
                                        # caller may request; anything else is rejected
   seed: 42
-  timeout_s: 120
-  max_output_tokens: 2048
+  timeout_s: 120                      # read timeout of one provider call; also the deadline after
+                                       # which an invalid first answer is not retried
+  max_output_tokens: 2048             # anthropic raises this to a floor of 16000 (see Providers)
+  max_transcript_words: 1500          # the transcript sent to the model is cut to this many words
 ```
 
 `llm` is not part of `config_hash` (only `analysis` and `articulation` are), so changing it never
@@ -193,37 +195,60 @@ process environment:
 ### Providers
 
 - **`openai_compatible`** talks to any server exposing the OpenAI chat-completions wire format
-  (Ollama's OpenAI-compatible endpoint, vLLM, LM Studio, …) over `httpx`. It tries strict structured
-  output (`response_format: json_schema`) first and falls back once, on a 4xx, to
-  `response_format: json_object` with the schema spelled out in the system prompt.
+  (Ollama's OpenAI-compatible endpoint, vLLM, LM Studio and others) over `httpx`. It tries strict
+  structured output (`response_format: json_schema`) first and falls back once, only on a 400 or
+  422, to `response_format: json_object` with the schema spelled out in the system prompt; 401, 403,
+  404, 429 and 5xx fail immediately. Parsing tolerates a `<think>...</think>` block, a Markdown code
+  fence and prose around the JSON object; `finish_reason: "length"` is reported as a truncated
+  response. Connect timeout is 10 s; read timeout is `timeout_s`; `GET /models` uses 10 s overall.
 - **`anthropic`** uses the official SDK's structured outputs (`output_config.format`) instead of a
   forced tool choice, and never sets `temperature`: current Claude models reject both with HTTP 400.
-  Determinism comes from the strict schema, the fixed prompt and the post-checks below.
+  Determinism comes from the strict schema, the fixed prompt and the post-checks below. It sends
+  `output_config.effort: "low"` (coaching is a short structured summary; higher effort only adds
+  latency) and `max_tokens = max(max_output_tokens, 16000)`, because thinking tokens count against
+  `max_tokens` and a lower budget truncates the answer. Generation runs with SDK retries disabled
+  (coaching degrades to a warning instead of doubling the wait); model listing keeps the SDK
+  default retries with a 10 s timeout.
 
 **Pointing at a local Ollama:** run `ollama serve` and pull a model, then set
 `llm.base_url: http://localhost:11434/v1` (the default) for a backend running directly on the host,
 or rely on compose's `LLM_BASE_URL_OVERRIDE` default for a backend running in a container. Either
 way, `provider: openai_compatible` and `model` (or `allowed_models`) name the pulled model.
 
+**Ollama and a containerised backend:** Ollama listens on `127.0.0.1` by default, which a container
+cannot reach through `host.docker.internal`. Make it listen on all interfaces with
+`OLLAMA_HOST=0.0.0.0` (on macOS: `launchctl setenv OLLAMA_HOST 0.0.0.0`, then quit and restart the
+Ollama app). Warning: this exposes Ollama's unauthenticated API to your whole LAN. Block port 11434
+in your firewall, or bind it to the Docker bridge IP only instead of `0.0.0.0`. Under Rancher
+Desktop the host alias is `host.rancher-desktop.internal`: set
+`LLM_BASE_URL_OVERRIDE=http://host.rancher-desktop.internal:11434/v1`.
+
 ### Payload, post-checks and degrade behaviour
 
 The payload sent to a provider drops `per_phrase`, `per_phrase_end_drop_db` and the transcript's
 `words`/`segments`; it caps `long_pauses`, `eaten_words`, `rushed_runs` and `low_conf_words` to 20
-items each; and it includes a `comparison` block (deltas vs. the user's previous analysis by
-`recorded_at`, or `null` when none exists).
+items each; it replaces `metrics.timeline` (one entry per window) with `metrics.timeline_summary`
+(`window_s`, `window_count`, and min/p50/max of `f0_median_hz`, `f0_sd_st` and
+`intensity_median_db` over non-null windows); it cuts the transcript text to
+`max_transcript_words` words, with `transcript_truncated` and `transcript_word_count` (the full
+count) always present; and it includes a `comparison` block (deltas vs. the user's previous
+analysis by `recorded_at`, or `null` when none exists).
 
 Two checks run on every answer and add to `coaching_warnings` without ever discarding the stored
 coaching JSON:
 
-- **Number check**: every number the model cites in `what_improved`, `what_is_lacking`,
-  `next_steps` or `marked_up_example` must trace back to a numeric value in the payload (rendered at
-  0, 1 or 2 decimals, so a re-rounding is accepted but an invented number is flagged).
+- **Number check**: every number the model cites in `what_improved`, `what_is_lacking` or
+  `next_steps` must trace back to a numeric value in the payload (as serialised, or rendered at 0 to
+  6 decimals, with thousands separators for integers; a negative delta may be cited unsigned), to a
+  number in the transcript or the system prompt, or be a small count from 0 to 10. A re-rounding is
+  accepted; an invented number is flagged. `marked_up_example` is covered by the markup check.
 - **Markup check**: `marked_up_example`, with `//`/`↘` marks removed and punctuation stripped, must
   be a contiguous word subsequence of the transcript. With no transcript available, the check is
   skipped with a `"no transcript available for marked_up_example"` warning instead of failing.
 
 A model's first answer that fails schema validation is retried once with the validation error
-attached; a second failure (or any provider exception: network, auth, HTTP status, timeout) stores
+attached (cut to 500 characters; no retry once the first call has taken longer than `timeout_s`);
+a second failure (or any provider exception: network, auth, HTTP status, timeout) stores
 `coaching: null` and a readable warning, never a stack trace or a URL carrying a key.
 
 ### Endpoints
@@ -232,7 +257,8 @@ attached; a second failure (or any provider exception: network, auth, HTTP statu
   `{enabled: false, provider: null, models: []}` without calling the provider; a provider that
   cannot list models answers `503`.
 - `GET /api/me` → `llm_enabled` and `llm_provider` (`null` when disabled) mirror `config.yaml`.
-- `POST /api/analyses/{id}/coach` (body: `{speaker_context?, model?}`) re-runs coaching synchronously
+- `POST /api/analyses/{id}/coach` (body: `{speaker_context?, model?}`, `speaker_context` at most 2000
+  characters, the same limit as the upload form field) re-runs coaching synchronously
   and returns the updated analysis detail. `404` when the analysis does not exist, `503` when
   coaching is disabled, `422` when the requested (or configured) model is rejected by a non-empty
   `allowed_models`, or when no model is requested or configured and the provider is not `anthropic`

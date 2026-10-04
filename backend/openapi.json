@@ -674,6 +674,7 @@
           "speaker_context": {
             "anyOf": [
               {
+                "maxLength": 2000,
                 "type": "string"
               },
               {
@@ -2206,6 +2207,7 @@
                     "type": "string"
                   },
                   "speaker_context": {
+                    "maxLength": 2000,
                     "type": "string"
                   }
                 },

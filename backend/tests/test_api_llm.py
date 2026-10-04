@@ -138,3 +138,59 @@ def test_coach_200_with_provider_failure_stores_warning_not_an_error(tmp_path, m
         body = r.json()
         assert body["coaching"] is None
         assert body["coaching_warnings"] == ["coaching failed: down"]
+
+
+def test_coach_ends_request_transaction_before_the_llm_call(tmp_path, monkeypatch):
+    from sqlalchemy.orm import Session
+
+    app, ctx = make_test_app(tmp_path, cfg=_cfg(enabled=True, model="test-model"), job_fn=fake_job_fn)
+    monkeypatch.setattr("vocal_coach.llm.service.get_provider", lambda *a, **k: FakeProvider([VALID_COACHING]))
+    events: list[str] = []
+    original_rollback = Session.rollback
+    original_coach = service.coach_analysis
+
+    def _rollback(self):
+        events.append("rollback")
+        return original_rollback(self)
+
+    def _coach(*a, **k):
+        events.append("coach")
+        return original_coach(*a, **k)
+
+    with TestClient(app) as client:
+        analysis_id = _create_analysis(client, ctx)
+        monkeypatch.setattr(Session, "rollback", _rollback)
+        monkeypatch.setattr(service, "coach_analysis", _coach)
+        r = client.post(f"/api/analyses/{analysis_id}/coach", headers=ctx["auth"]())
+        assert r.status_code == 200
+    assert "coach" in events
+    assert "rollback" in events[:events.index("coach")]
+
+
+def test_coach_rejects_speaker_context_over_2000_chars(tmp_path):
+    app, ctx = make_test_app(tmp_path, cfg=_cfg(enabled=True, model="test-model"), job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        analysis_id = _create_analysis(client, ctx)
+        r = client.post(f"/api/analyses/{analysis_id}/coach", headers=ctx["auth"](),
+                        json={"speaker_context": "x" * 2001})
+        assert r.status_code == 422
+
+
+def test_coach_accepts_speaker_context_of_exactly_2000_chars(tmp_path, monkeypatch):
+    app, ctx = make_test_app(tmp_path, cfg=_cfg(enabled=True, model="test-model"), job_fn=fake_job_fn)
+    monkeypatch.setattr("vocal_coach.llm.service.get_provider", lambda *a, **k: FakeProvider([VALID_COACHING]))
+    with TestClient(app) as client:
+        analysis_id = _create_analysis(client, ctx)
+        r = client.post(f"/api/analyses/{analysis_id}/coach", headers=ctx["auth"](),
+                        json={"speaker_context": "x" * 2000})
+        assert r.status_code == 200
+
+
+def test_upload_rejects_speaker_context_over_2000_chars(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        r = _upload(client, ctx["auth"](), speaker_context="x" * 2001)
+        assert r.status_code == 422
+        assert r.json()["detail"] == "speaker_context is too long (max 2000 characters)"
+        ok = _upload(client, ctx["auth"](), speaker_context="x" * 2000)
+        assert ok.status_code == 202

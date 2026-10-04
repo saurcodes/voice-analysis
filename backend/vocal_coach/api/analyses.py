@@ -37,6 +37,7 @@ RAW_KINDS = ("metrics", "transcript", "coaching")
 LIST_LIMIT_MIN, LIST_LIMIT_MAX, LIST_LIMIT_DEFAULT = 1, 200, repo.SUMMARY_PAGE_SIZE
 SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
 MAX_DOWNLOAD_STEM = 100  # keep Content-Disposition short and ASCII
+SPEAKER_CONTEXT_MAX_CHARS = 2000  # also the CoachRequest limit (api/llm.py); it is sent to the LLM verbatim
 
 
 class JobIds(BaseModel):
@@ -144,7 +145,7 @@ UPLOAD_OPENAPI = {
         "type": "object", "required": ["file"],
         "properties": {
             "file": {"type": "string", "format": "binary"},
-            "speaker_context": {"type": "string"},
+            "speaker_context": {"type": "string", "maxLength": SPEAKER_CONTEXT_MAX_CHARS},
             "llm_enabled": {"type": "boolean"},
             "llm_model": {"type": "string"},
             "recorded_at": {"type": "string", "format": "date-time"},
@@ -175,6 +176,9 @@ async def create_analysis(
         if not isinstance(file, StarletteUploadFile):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "file is required")
         speaker_context = form.get("speaker_context") or None
+        if isinstance(speaker_context, str) and len(speaker_context) > SPEAKER_CONTEXT_MAX_CHARS:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                f"speaker_context is too long (max {SPEAKER_CONTEXT_MAX_CHARS} characters)")
         recorded_at = _parse_recorded_at(form.get("recorded_at"))
         llm_enabled = str(form.get("llm_enabled", "false")).strip().lower() in {"1", "true", "yes", "on"}
         llm_model = form.get("llm_model") or None

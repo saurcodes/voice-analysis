@@ -5,10 +5,10 @@ import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from vocal_coach.api.analyses import AnalysisDetail, to_detail
+from vocal_coach.api.analyses import SPEAKER_CONTEXT_MAX_CHARS, AnalysisDetail, to_detail
 from vocal_coach.auth.deps import CurrentUser, get_current_user, get_session
 from vocal_coach.llm import service
 from vocal_coach.llm.base import LLMError
@@ -24,7 +24,7 @@ class LlmModels(BaseModel):
 
 
 class CoachRequest(BaseModel):
-    speaker_context: str | None = None
+    speaker_context: str | None = Field(default=None, max_length=SPEAKER_CONTEXT_MAX_CHARS)
     model: str | None = None
 
 
@@ -56,6 +56,10 @@ async def coach(
 ) -> AnalysisDetail:
     if repo.get_analysis(session, user.id, analysis_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "analysis not found")
+    # End the request session's read transaction now: the LLM call below can take minutes, and an
+    # open transaction would hold this pooled connection idle-in-transaction (and its snapshot) for
+    # the whole wait. The session reopens a fresh transaction for the final read.
+    session.rollback()
     cfg = request.app.state.cfg
     if not cfg.llm.enabled:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, service.DISABLED)

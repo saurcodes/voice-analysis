@@ -202,3 +202,41 @@ def test_pipeline_llm_requested_but_disabled_stores_warning(cfg, session, tmp_pa
     row = repo.get_analysis(session, user.id, analysis_id)
     assert row.coaching_json is None
     assert row.coaching_warnings == ["coaching is not enabled on this server"]
+
+
+def _raising_coach(*_a, **_k):
+    raise RuntimeError("database is locked")
+
+
+@requires_ffmpeg
+def test_pipeline_coach_stage_exception_still_reaches_done(cfg, session, tmp_path: Path, monkeypatch, caplog):
+    monkeypatch.setattr("vocal_coach.pipeline.coach_analysis", _raising_coach)
+    req, user = _req(session, tmp_path)
+    req.llm_enabled = True
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+    seen: list[tuple[str, int]] = []
+    with caplog.at_level("WARNING", logger="vocal_coach.pipeline"):
+        analysis_id = run_pipeline(req, _llm_enabled_cfg(cfg), settings, session,
+                                   lambda s, p: seen.append((s, p)), whisper_model=_fake())
+    assert seen[-1] == ("done", 100)
+    assert repo.get_analysis(session, user.id, analysis_id) is not None
+    assert any(str(req.job_id) in r.getMessage() for r in caplog.records)
+
+
+@requires_ffmpeg
+def test_pipeline_dedupe_coach_stage_exception_still_reaches_done(cfg, session, tmp_path: Path, monkeypatch, caplog):
+    req1, user = _req(session, tmp_path, "a.wav")
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+    first = run_pipeline(req1, cfg, settings, session, lambda s, p: None, whisper_model=_fake())
+
+    monkeypatch.setattr("vocal_coach.pipeline.coach_analysis", _raising_coach)
+    job2 = repo.create_job(session, user.id)
+    req2 = JobRequest(job_id=job2.id, user_id=user.id, source_path=req1.source_path, file_name="a.wav",
+                      recorded_at=req1.recorded_at, llm_enabled=True, llm_model="test-model")
+    seen: list[tuple[str, int]] = []
+    with caplog.at_level("WARNING", logger="vocal_coach.pipeline"):
+        second = run_pipeline(req2, _llm_enabled_cfg(cfg), settings, session,
+                              lambda s, p: seen.append((s, p)), whisper_model=_fake())
+    assert second == first
+    assert seen[-1] == ("done", 100)
+    assert any(str(job2.id) in r.getMessage() for r in caplog.records)
