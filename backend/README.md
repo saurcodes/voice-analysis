@@ -77,3 +77,28 @@ The migration URL is taken from `-x url=…`, then the programmatic `upgrade_to_
 Tests run the models on in-memory SQLite. `tests/test_migrations.py::test_upgrade_head_on_real_postgres` runs the migration against a throwaway Postgres container, round-trips data through the repository (JSONB, time zones, SQL `NULL`, cascades, summaries) and checks models and migration match; it is skipped when Docker is not installed.
 
 Comparison (`vocal_coach/storage/comparison.py`) follows `config.yaml → comparison`: per metric path, `delta = last − first`, step deltas, arrow `↑ ↓ →`, verdict `improved / worsened / neutral / unchanged / unavailable`. `unchanged` means the change is below `min_meaningful_change_pct` of the first value. `delta` and the verdict span the first and last recordings that have the metric; a row with gaps is marked `partial: true`, and a metric present in fewer than two recordings is `unavailable`, never an error. Ties on `recorded_at` are ordered by id. Analyses with different `config_hash` or `analyser_version` are still compared, with `config_mismatch` / `analyser_version_mismatch: true`.
+
+## Running the API (Plan 4)
+
+```bash
+cp .env.example .env               # edit if needed
+docker compose up -d --build       # postgres + keycloak (realm imported, user demo/demo) + backend
+./scripts/smoke.sh path/to/recording.wav   # token → /api/me → upload → SSE progress
+```
+
+Dev loop: `docker compose up -d postgres keycloak`, then from `backend/`:
+`DATABASE_URL=postgresql+psycopg://vocal:vocal@localhost:5432/vocal_coach uvicorn "vocal_coach.main:create_app" --factory --reload`.
+Migrations run once in the container entrypoint; with `--reload` locally run `alembic upgrade head` yourself.
+
+Auth: Bearer tokens from Keycloak realm `vocal-coach`, client `vocal-coach-web` (public, PKCE). The realm export adds an
+audience mapper so access tokens carry `aud: vocal-coach-web`; without it Keycloak only emits `aud: account` and the API
+answers 401. `directAccessGrantsEnabled` is on only so `scripts/smoke.sh` can use the password grant — turn it off
+outside local development.
+
+Jobs run in a spawn-based process pool (`JOB_WORKERS`, default 1): praat-parselmouth and CTranslate2 are not safe to share
+across threads, and each worker loads the whisper model once. Progress is written to the `jobs` row and streamed by
+`GET /api/jobs/{id}/events`. On restart, unfinished jobs are marked `failed / server restarted`. Run exactly one backend
+process per database (the restart sweep is not multi-process safe).
+
+Endpoints: see `/docs`. Drive (`/api/drive/*`, `source: "drive"`) and coaching (`/api/analyses/{id}/coach`,
+`/api/llm/models`) are stubs until Plans 6–7.
