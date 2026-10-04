@@ -1,5 +1,5 @@
 import { useRef, useState, type DragEvent, type KeyboardEvent } from "react";
-import { UploadSimple, X } from "@phosphor-icons/react";
+import { UploadSimple, WarningCircle, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -103,7 +103,10 @@ export function UploadDropzone({
       </div>
 
       {rejectedNames.length > 0 && (
-        <p className="text-sm text-serious">Unsupported file type: {rejectedNames.join(", ")}</p>
+        <p role="alert" className="flex items-center gap-1.5 text-sm text-serious">
+          <WarningCircle weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+          Unsupported file type: {rejectedNames.join(", ")}
+        </p>
       )}
 
       {files.length > 0 && (

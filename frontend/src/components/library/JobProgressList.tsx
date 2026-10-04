@@ -209,7 +209,7 @@ function JobProgressRow({
           className="mt-2 h-1.5 w-full overflow-hidden rounded-md bg-muted"
         >
           <motion.div
-            className={cn("h-full rounded-md", isDone ? "bg-good" : "bg-primary")}
+            className={cn("h-full rounded-md", isDone ? "bg-good-fill" : "bg-primary")}
             animate={{ width: `${Math.round(progressPct)}%` }}
             transition={reduceMotion ? { duration: 0 } : { duration: 0.3, ease: "easeOut" }}
           />

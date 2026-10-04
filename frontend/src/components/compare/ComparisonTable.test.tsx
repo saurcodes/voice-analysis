@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import { renderWithProviders } from "@/test/render";
 import { comparison } from "@/test/fixtures";
 import { ComparisonTable } from "./ComparisonTable";
@@ -50,6 +50,18 @@ test("unavailable row shows n/a with no arrow, plus the gaps badge for its parti
 
   expect(scoped.getByText("gaps")).toBeInTheDocument();
   expect(scoped.getByLabelText("not available")).toBeInTheDocument();
+});
+
+test("the gaps badge is keyboard-focusable and shows its explanation on focus", async () => {
+  renderTable();
+
+  const badge = screen.getByText("gaps");
+  expect(badge).toHaveAttribute("tabindex", "0");
+  act(() => badge.focus());
+
+  expect(
+    (await screen.findAllByText(/some recordings lack this metric/i)).length,
+  ).toBeGreaterThan(0);
 });
 
 test("renders one value column per recording, named from the recordingNames prop", () => {

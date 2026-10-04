@@ -167,7 +167,13 @@ export function AnalysesTable({
               <TableCell>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="num cursor-default">{relativeTime(row.recorded_at)}</span>
+                    {/* Focusable so keyboard users reach the exact date too, not just hover. */}
+                    <span
+                      tabIndex={0}
+                      className="num cursor-default rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    >
+                      {relativeTime(row.recorded_at)}
+                    </span>
                   </TooltipTrigger>
                   <TooltipContent>{formatDateTime(row.recorded_at)}</TooltipContent>
                 </Tooltip>
@@ -226,7 +232,12 @@ export function AnalysesTable({
             <DialogTitle>Delete this analysis?</DialogTitle>
             <DialogDescription>This cannot be undone.</DialogDescription>
           </DialogHeader>
-          {deleteError && <p className="text-sm text-serious">{deleteError}</p>}
+          {deleteError && (
+            <p role="alert" className="flex items-center gap-1.5 text-sm text-serious">
+              <WarningCircle weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+              {deleteError}
+            </p>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={closeDialog}>
               Cancel

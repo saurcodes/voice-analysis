@@ -18,7 +18,7 @@ export function QualityBanner({ reasons }: { reasons: string[] }) {
   return (
     <div
       role="status"
-      className="flex items-start gap-3 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-4 py-3"
+      className="flex items-start gap-3 rounded-lg border border-[var(--warning-fill)]/40 bg-[var(--warning-fill)]/10 px-4 py-3"
     >
       <Warning weight="regular" className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
       <div className="flex flex-col gap-0.5 text-sm text-foreground">

@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { Minus, TrendDown, TrendUp } from "@phosphor-icons/react";
+import { Minus, TrendDown, TrendUp, WarningCircle } from "@phosphor-icons/react";
 import type { components } from "@/api/types";
 import { formatMetricValue, METRIC_LABELS } from "@/lib/metrics";
 import { Badge } from "@/components/ui/badge";
@@ -121,11 +121,13 @@ function MetricCell({ row }: { row: ComparisonRow }) {
       {row.partial && (
         <Tooltip>
           <TooltipTrigger asChild>
+            {/* tabIndex makes the badge keyboard-focusable so the tooltip is not hover-only. */}
             <Badge
+              tabIndex={0}
               variant="outline"
-              className="border-[var(--warning)]/40 bg-[var(--warning)]/10 text-warning"
-              title="Some recordings lack this metric; change computed from the available ones."
+              className="border-[var(--warning-fill)]/40 bg-[var(--warning-fill)]/10 text-warning"
             >
+              <WarningCircle weight="regular" aria-hidden="true" />
               gaps
             </Badge>
           </TooltipTrigger>

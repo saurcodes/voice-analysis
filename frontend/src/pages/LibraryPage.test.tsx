@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { server } from "@/test/msw";
 import { renderWithProviders } from "@/test/render";
 import { jobStatus, summary } from "@/test/fixtures";
+import { formatDateTime, relativeTime } from "@/lib/dates";
 import { LibraryPage } from "./LibraryPage";
 
 const navigateMock = vi.fn();
@@ -61,6 +62,24 @@ test("renders analyses with numbers formatted to one decimal in mono, and null a
   const naCells = withinRow2.getAllByLabelText("not available");
   expect(naCells.length).toBeGreaterThan(0);
   for (const cell of naCells) expect(cell).toHaveTextContent("-");
+});
+
+test("the relative Recorded time is keyboard-focusable and reveals the exact date on focus", async () => {
+  server.use(http.get("/api/analyses", () => HttpResponse.json(rowFixtures())));
+  server.use(http.get("/api/jobs", () => HttpResponse.json([])));
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+  await screen.findByText("practice-run.wav");
+
+  const exact = formatDateTime("2026-09-28T14:03:00Z");
+  expect(screen.queryByText(exact)).not.toBeInTheDocument();
+
+  // Tab from the row's checkbox lands on the Recorded trigger (the file name is not focusable).
+  screen.getByRole("checkbox", { name: "Select practice-run.wav" }).focus();
+  await user.tab();
+  expect(document.activeElement).toHaveTextContent(relativeTime("2026-09-28T14:03:00Z"));
+  expect((await screen.findAllByText(exact)).length).toBeGreaterThan(0);
 });
 
 test("shows the empty state with an Analyse CTA when there are no analyses", async () => {

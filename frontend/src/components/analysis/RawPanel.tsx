@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download } from "@phosphor-icons/react";
+import { Download, WarningCircle } from "@phosphor-icons/react";
 import { useAuthState } from "@/auth/context";
 import { ApiError, authFetch } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -106,7 +106,12 @@ export function RawPanel({
               <span className="text-sm text-muted-foreground">Not available</span>
             )}
           </div>
-          {errors[row.kind] && <p className="text-sm text-serious">{errors[row.kind]}</p>}
+          {errors[row.kind] && (
+            <p role="alert" className="flex items-center gap-1.5 text-sm text-serious">
+              <WarningCircle weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+              {errors[row.kind]}
+            </p>
+          )}
         </div>
       ))}
     </div>

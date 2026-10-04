@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { Trash } from "@phosphor-icons/react";
+import { Trash, WarningCircle } from "@phosphor-icons/react";
 import { ApiError } from "@/api/client";
 import { useAnalysis, useDeleteAnalysis } from "@/api/hooks";
 import { AppShell } from "@/components/AppShell";
@@ -175,7 +175,12 @@ export function AnalysisPage() {
             <DialogTitle>Delete this analysis?</DialogTitle>
             <DialogDescription>This cannot be undone.</DialogDescription>
           </DialogHeader>
-          {deleteError && <p className="text-sm text-serious">{deleteError}</p>}
+          {deleteError && (
+            <p role="alert" className="flex items-center gap-1.5 text-sm text-serious">
+              <WarningCircle weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+              {deleteError}
+            </p>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setConfirmOpen(false)}>
               Cancel
