@@ -386,6 +386,34 @@ export function analysisDetail(
   return { ...base, ...overrides };
 }
 
+/**
+ * Coaching fixture: realistic two-item lists plus a marked_up_example that quotes the
+ * default transcript fixture's words (see WORD_TEXTS/buildTranscript above), decorated with
+ * the "//" pause marker, a CAPS emphasis word and a "down" intonation arrow, matching what
+ * the real LLM output looks like. "17.5" in what_is_lacking is the number the default coach
+ * handler's coaching_warnings flags as an unmatched token (see handlers.ts).
+ */
+export function coaching(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    what_improved: [
+      "Pitch range widened to 10.8 semitones, more expressive than the opening.",
+      "Trailing-off dropped to just 1 instance across the whole recording.",
+    ],
+    what_is_lacking: [
+      "Filler words still run high at 18.0 per minute, mostly um and you know.",
+      "Energy fades over the final 17.5 seconds before the close.",
+    ],
+    next_steps: [
+      "Cut the scripted filler phrase \"you know\" from the opening.",
+      "Hold the final sentence's energy instead of trailing off at the end.",
+    ],
+    marked_up_example:
+      "So um I wanted to walk you through the quarterly RESULTS today// and you " +
+      "know we should focus on what matters most↘ um so actually we delivered strong growth",
+    ...overrides,
+  };
+}
+
 export function comparison(): ComparisonResult {
   const ids = ["a1a1a1a1-0000-4000-8000-000000000001", "a1a1a1a1-0000-4000-8000-000000000002"];
   const recordedAt = ["2026-09-20T10:00:00Z", "2026-09-28T14:03:00Z"];

@@ -11,6 +11,7 @@ import { useAuthState } from "@/auth/context";
 import { createApi } from "./client";
 import type { components } from "./types";
 
+type CoachRequest = components["schemas"]["CoachRequest"];
 type MeResponse = components["schemas"]["MeResponse"];
 type PublicConfig = components["schemas"]["PublicConfig"];
 type LlmModels = components["schemas"]["LlmModels"];
@@ -141,6 +142,22 @@ export function useDeleteAnalysis() {
     onSuccess: (_data, id) => {
       void queryClient.invalidateQueries({ queryKey: SUMMARIES_KEY });
       queryClient.removeQueries({ queryKey: ["vc", "analysis", id] });
+    },
+  });
+}
+
+/** Re-runs coaching for an analysis. On success, writes the updated AnalysisDetail straight
+ * into that analysis's query cache (so the Coaching tab re-renders from fresh data without a
+ * refetch) and invalidates the summaries list (has_coaching may have flipped). */
+export function useCoachAnalysis() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: CoachRequest }) =>
+      api.post<AnalysisDetail>(`/api/analyses/${id}/coach`, body),
+    onSuccess: (detail, { id }) => {
+      queryClient.setQueryData(["vc", "analysis", id], detail);
+      void queryClient.invalidateQueries({ queryKey: SUMMARIES_KEY });
     },
   });
 }

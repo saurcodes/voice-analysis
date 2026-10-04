@@ -418,6 +418,13 @@ export interface components {
             /** Word Final Tail Fraction */
             word_final_tail_fraction: number;
         };
+        /** CoachRequest */
+        CoachRequest: {
+            /** Model */
+            model?: string | null;
+            /** Speaker Context */
+            speaker_context?: string | null;
+        };
         /** ComparisonConfig */
         ComparisonConfig: {
             /** Directions */
@@ -1021,7 +1028,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CoachRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1029,7 +1040,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["AnalysisDetail"];
                 };
             };
             /** @description analysis not found */
@@ -1039,17 +1050,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Validation Error */
+            /** @description requested model is not allowed on this server */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
+                content?: never;
             };
-            /** @description coaching is not available yet */
-            501: {
+            /** @description coaching is not enabled on this server */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1311,6 +1320,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LlmModels"];
                 };
+            };
+            /** @description LLM provider unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

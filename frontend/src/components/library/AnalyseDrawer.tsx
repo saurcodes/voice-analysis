@@ -62,18 +62,24 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
   const [files, setFiles] = useState<File[]>([]);
   const [speakerContext, setSpeakerContext] = useState("");
   const [llmEnabled, setLlmEnabled] = useState(false);
-  const [llmModel, setLlmModel] = useState<string>("");
+  // Tracks only an explicit user pick; the actual selected model (below) falls back to the
+  // first available model so the Select preselects one as soon as the list arrives, without
+  // an effect to sync it (this project's lint config flags setState calls made from effects).
+  const [llmModelOverride, setLlmModelOverride] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [rows, setRows] = useState<JobProgressItem[]>([]);
   const batchRef = useRef(0);
 
   const llmDisabled = meQuery.data?.llm_enabled === false;
+  const llmModels = llmModelsQuery.data?.models ?? [];
+  const llmModel =
+    llmModelOverride && llmModels.includes(llmModelOverride) ? llmModelOverride : (llmModels[0] ?? "");
 
   function resetForm() {
     setFiles([]);
     setSpeakerContext("");
     setLlmEnabled(false);
-    setLlmModel("");
+    setLlmModelOverride(null);
     setRows([]);
   }
 
@@ -227,12 +233,12 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
               <p className="text-sm text-muted-foreground">Coaching is not enabled on this server yet</p>
             ) : (
               llmEnabled && (
-                <Select value={llmModel} onValueChange={setLlmModel}>
+                <Select value={llmModel} onValueChange={setLlmModelOverride}>
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Choose a model" />
                   </SelectTrigger>
                   <SelectContent>
-                    {(llmModelsQuery.data?.models ?? []).map((model) => (
+                    {llmModels.map((model) => (
                       <SelectItem key={model} value={model}>
                         {model}
                       </SelectItem>

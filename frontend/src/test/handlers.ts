@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import type { components } from "@/api/types";
-import { analysisDetail, comparison, jobStatus, summary } from "./fixtures";
+import { analysisDetail, coaching, comparison, jobStatus, summary } from "./fixtures";
 
 /**
  * MSW handlers for every endpoint the app calls. Covers auth bootstrap, config and LLM
@@ -185,4 +185,31 @@ export const handlers = [
   }),
 
   http.get("/api/comparisons", () => HttpResponse.json(comparison())),
+
+  http.post("/api/analyses/:id/coach", ({ params }) =>
+    HttpResponse.json(
+      analysisDetail("default", {
+        id: params.id as string,
+        coaching: coaching(),
+        coaching_warnings: ["number 17.5 in what_is_lacking does not match any metric value"],
+      }),
+    ),
+  ),
 ];
+
+/**
+ * Override handlers for a server with coaching turned on: /api/me reports llm_enabled, and
+ * /api/llm/models lists a couple of models. Individual tests bring these in with
+ * `server.use(...llmEnabledHandlers())` rather than baking them into the default handlers
+ * above, since most tests exercise the (much more common) coaching-disabled default.
+ */
+export function llmEnabledHandlers(models: string[] = ["qwen3:8b", "llama3.2:latest"]) {
+  return [
+    http.get("/api/me", () =>
+      HttpResponse.json({ ...meResponse, llm_enabled: true, llm_provider: "openai_compatible" }),
+    ),
+    http.get("/api/llm/models", () =>
+      HttpResponse.json({ enabled: true, provider: "openai_compatible", models }),
+    ),
+  ];
+}

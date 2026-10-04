@@ -157,7 +157,12 @@ export function AnalysisPage() {
           </TabsContent>
 
           <TabsContent value="coaching" className="pt-6">
-            <CoachingPanel coaching={analysis.coaching} coachingWarnings={analysis.coaching_warnings} />
+            <CoachingPanel
+              analysisId={analysis.id}
+              coaching={analysis.coaching}
+              coachingWarnings={analysis.coaching_warnings}
+              speakerContext={analysis.speaker_context}
+            />
           </TabsContent>
 
           <TabsContent value="raw" className="pt-6">

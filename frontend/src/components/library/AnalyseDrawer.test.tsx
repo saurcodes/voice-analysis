@@ -2,6 +2,8 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/test/render";
 import { ApiError } from "@/api/client";
+import { server } from "@/test/msw";
+import { llmEnabledHandlers } from "@/test/handlers";
 import { AnalyseDrawer } from "./AnalyseDrawer";
 import * as uploadModule from "@/api/upload";
 
@@ -59,6 +61,28 @@ test("the Coaching switch is disabled with an explanation when the server has it
 
   expect(await screen.findByText("Coaching is not enabled on this server yet")).toBeInTheDocument();
   expect(screen.getByRole("switch", { name: "Coaching" })).toBeDisabled();
+});
+
+test("with coaching enabled on the server, the switch is enabled, toggling it reveals the model select, and submitting sends llm_enabled and the selected model", async () => {
+  server.use(...llmEnabledHandlers());
+  uploadAnalysisMock.mockResolvedValue({ job_ids: ["job-ok-1"] });
+
+  const user = userEvent.setup();
+  renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
+
+  const coachingSwitch = await screen.findByRole("switch", { name: "Coaching" });
+  expect(coachingSwitch).toBeEnabled();
+
+  await user.click(coachingSwitch);
+  await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent("qwen3:8b"));
+
+  const dropzone = screen.getByRole("button", { name: /drag and drop recordings/i });
+  fireEvent.drop(dropzone, { dataTransfer: { files: [makeFile("pitch.wav")] } });
+  await user.click(screen.getByRole("button", { name: "Analyse 1 file" }));
+
+  await waitFor(() => expect(uploadAnalysisMock).toHaveBeenCalledTimes(1));
+  const [, fields] = uploadAnalysisMock.mock.calls[0];
+  expect(fields).toMatchObject({ llm_enabled: true, llm_model: "qwen3:8b" });
 });
 
 test("the Google Drive tab is disabled", () => {
