@@ -28,7 +28,8 @@ services:
       KC_HOSTNAME: localhost
       KC_HTTP_ENABLED: "true"
     volumes:
-      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      # Dev realm (demo user, password grant for scripts/smoke.sh) unless KEYCLOAK_REALM_FILE says otherwise.
+      - ${KEYCLOAK_REALM_FILE:-./keycloak/realm-export.dev.json}:/opt/keycloak/data/import/realm-export.json:ro
     ports: ["8080:8080"]
     depends_on:
       postgres:

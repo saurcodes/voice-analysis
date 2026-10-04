@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Bring the stack up, obtain a token for the demo user, hit /api/me, upload a WAV, wait for the job.
+# Needs the dev realm (keycloak/realm-export.dev.json, the compose default): demo user + password grant.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 docker compose up -d --build

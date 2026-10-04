@@ -1,0 +1,44 @@
+{
+  "realm": "vocal-coach",
+  "enabled": true,
+  "registrationAllowed": true,
+  "loginWithEmailAllowed": true,
+  "sslRequired": "none",
+  "roles": {"realm": [{"name": "user", "description": "Vocal Coach user"}]},
+  "defaultRoles": ["user", "offline_access", "uma_authorization"],
+  "clients": [
+    {
+      "clientId": "vocal-coach-web",
+      "name": "Vocal Coach web",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:5173/*", "http://localhost:3000/*"],
+      "webOrigins": ["http://localhost:5173", "http://localhost:3000"],
+      "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "http://localhost:5173/*"},
+      "protocolMappers": [
+        {
+          "name": "vocal-coach-web audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {"included.client.audience": "vocal-coach-web", "id.token.claim": "false", "access.token.claim": "true"}
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "demo",
+      "enabled": true,
+      "email": "demo@example.test",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "User",
+      "credentials": [{"type": "password", "value": "demo", "temporary": false}],
+      "realmRoles": ["user"]
+    }
+  ]
+}
