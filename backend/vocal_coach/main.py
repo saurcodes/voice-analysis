@@ -62,6 +62,7 @@ def create_app(
     app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin], allow_credentials=True,
                        allow_methods=["*"], allow_headers=["*"])
 
+    # Backstop: get_current_user already maps AuthError → 401; this catches any route raising it directly.
     @app.exception_handler(AuthError)
     async def _auth_error(_request, exc: AuthError):
         return JSONResponse({"detail": f"invalid token: {exc}"}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
