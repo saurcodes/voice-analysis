@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from vocal_coach.auth.deps import CurrentUser, get_current_user, get_session
+from vocal_coach.jobs.runner import RunnerUnavailable
 from vocal_coach.pipeline import JobRequest
 from vocal_coach.storage import repo
 from vocal_coach.storage.repo import AnalysisSummary
@@ -146,7 +147,11 @@ async def create_analysis(
         req = JobRequest(job_id=job.id, user_id=user.id, source_path=path, file_name=file.filename or path.name,
                          recorded_at=datetime.now(timezone.utc), speaker_context=speaker_context,
                          llm_enabled=llm_enabled, llm_model=llm_model)
-        request.app.state.runner.submit(req)
+        try:
+            request.app.state.runner.submit(req)
+        except RunnerUnavailable:
+            repo.update_job(session, job.id, status="failed", error="job runner unavailable")
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "job runner unavailable; try again")
         return JobIds(job_ids=[job.id])
 
 

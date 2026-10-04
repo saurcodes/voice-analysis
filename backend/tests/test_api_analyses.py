@@ -122,6 +122,24 @@ def test_failed_job_is_visible(tmp_path):
         assert job["status"] == "failed" and job["error"] == "boom"
 
 
+def test_upload_returns_503_and_fails_job_when_runner_unavailable(tmp_path):
+    from vocal_coach.jobs.runner import RunnerUnavailable
+
+    class DeadRunner:
+        def submit(self, req):
+            raise RunnerUnavailable("job runner unavailable")
+
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        app.state.runner = DeadRunner()
+        r = _upload(client, ctx["auth"]())
+        assert r.status_code == 503 and r.json()["detail"] == "job runner unavailable; try again"
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            jobs = repo.list_jobs(s, user.id)
+        assert len(jobs) == 1 and (jobs[0].status, jobs[0].error) == ("failed", "job runner unavailable")
+
+
 def test_list_pagination(tmp_path):
     app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
     with TestClient(app) as client:

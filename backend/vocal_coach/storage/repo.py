@@ -22,6 +22,7 @@ PROGRESS_MIN = 0  # progress_pct is a percentage: 0 … 100 inclusive
 PROGRESS_MAX = 100
 FIRST_JOB_STAGE = "download"  # first pipeline stage (spec §10)
 SUMMARY_PAGE_SIZE = 50  # default page for GET /analyses summaries
+JOB_PAGE_SIZE = 50  # default page for GET /jobs
 SUMMARY_FIRST_OFFSET = 0
 ROWS_PER_ID = 1  # a scoped delete by primary key removes exactly one row when it succeeds
 
@@ -207,6 +208,21 @@ def update_job(session: Session, job_id: uuid.UUID, **fields) -> Job | None:
         setattr(job, k, v)
     _commit(session)
     return job
+
+
+def list_jobs(session: Session, user_id: uuid.UUID, *, status: str | None = None,
+              limit: int = JOB_PAGE_SIZE) -> list[Job]:
+    """The user's jobs, newest first, optionally filtered by status."""
+    stmt = select(Job).where(Job.user_id == user_id)
+    if status is not None:
+        stmt = stmt.where(Job.status == status)
+    return list(session.scalars(stmt.order_by(Job.created_at.desc(), Job.id.desc()).limit(limit)))
+
+
+def job_is_terminal(session: Session, job_id: uuid.UUID) -> bool:
+    """Runner-side check (unscoped, like `update_job`): has this job already finished?"""
+    job = session.get(Job, job_id, populate_existing=True)
+    return job is not None and job.status in TERMINAL_STATUSES
 
 
 def get_job(session: Session, user_id: uuid.UUID, job_id: uuid.UUID) -> Job | None:
