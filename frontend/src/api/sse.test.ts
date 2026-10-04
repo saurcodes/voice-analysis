@@ -3,7 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { server } from "@/test/msw";
 import { jobStatus } from "@/test/fixtures";
 import { ApiError } from "./client";
-import { POLL_MS, streamJobEvents, watchJob, type JobEvent } from "./sse";
+import { POLL_MS, streamJobEvents, watchJob, type JobEvent, type JobStatusLike } from "./sse";
 
 function sseResponse(body: string): Response {
   const encoder = new TextEncoder();
@@ -302,4 +302,35 @@ test("watchJob delivers no status for an SSE event that arrives after abort()", 
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   expect(statuses).toEqual([]);
+});
+
+test("watchJob keeps the stage on a progress frame that follows a stage frame", async () => {
+  // Real backend shape: every stage change emits "stage" then "progress", and the progress
+  // frame carries the stage too. Dropping it would collapse the label back to "Working".
+  const body =
+    'event: stage\r\ndata: {"stage":"extract","progress_pct":10}\r\n\r\n' +
+    'event: progress\r\ndata: {"progress_pct":20,"stage":"extract"}\r\n\r\n' +
+    'event: done\r\ndata: {"analysis_id":"a1"}\r\n\r\n';
+  const statuses: JobStatusLike[] = [];
+  let finished: (() => void) | undefined;
+  const allDelivered = new Promise<void>((resolve) => {
+    finished = resolve;
+  });
+
+  watchJob(
+    "job-1",
+    {
+      authFetch: async () => sseResponse(body),
+      getJob: async () => jobStatus({ status: "running" }),
+    },
+    (status) => {
+      statuses.push(status);
+      if (status.status === "done") finished?.();
+    },
+  );
+  await allDelivered;
+
+  expect(statuses[0]).toMatchObject({ status: "running", stage: "extract", progress_pct: 10 });
+  expect(statuses[1]).toMatchObject({ status: "running", stage: "extract", progress_pct: 20 });
+  expect(statuses[2]).toMatchObject({ status: "done", analysis_id: "a1" });
 });

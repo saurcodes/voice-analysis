@@ -45,7 +45,9 @@ export function LibraryPage() {
       </div>
 
       <div className="mt-6">
-        <JobsPanel excludeIds={trackedJobIds} />
+        {/* Only while the drawer is open does its own list watch these jobs; once it closes,
+            JobsPanel takes them over. */}
+        <JobsPanel excludeIds={drawerOpen ? trackedJobIds : []} />
         <AnalysesTable
           selectedIds={selectedIds}
           onToggleSelected={toggleSelected}

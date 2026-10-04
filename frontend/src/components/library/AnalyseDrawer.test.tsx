@@ -67,6 +67,66 @@ test("the Google Drive tab is disabled", () => {
   expect(screen.getByRole("tab", { name: "Google Drive" })).toBeDisabled();
 });
 
+test("a 415 from the server shows its detail inline on that file's row", async () => {
+  uploadAnalysisMock.mockRejectedValue(new ApiError(415, "unsupported media type: video/x-ms-asf"));
+
+  const user = userEvent.setup();
+  renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
+
+  const dropzone = screen.getByRole("button", { name: /drag and drop recordings/i });
+  fireEvent.drop(dropzone, { dataTransfer: { files: [makeFile("odd-take.wav")] } });
+  await user.click(screen.getByRole("button", { name: "Analyse 1 file" }));
+
+  expect(await screen.findByText("unsupported media type: video/x-ms-asf")).toBeInTheDocument();
+});
+
+test("reports each job as it is created, blocks closing mid-batch, then clears the picked files", async () => {
+  let releaseSecond: (() => void) | undefined;
+  const secondGate = new Promise<void>((resolve) => {
+    releaseSecond = resolve;
+  });
+  let callCount = 0;
+  uploadAnalysisMock.mockImplementation(async () => {
+    callCount += 1;
+    if (callCount === 2) {
+      await secondGate;
+      return { job_ids: ["job-b"] };
+    }
+    return { job_ids: ["job-a"] };
+  });
+  const onJobsCreated = vi.fn();
+  const onOpenChange = vi.fn();
+
+  const user = userEvent.setup();
+  renderWithProviders(
+    <AnalyseDrawer open onOpenChange={onOpenChange} onJobsCreated={onJobsCreated} />,
+  );
+
+  const dropzone = screen.getByRole("button", { name: /drag and drop recordings/i });
+  fireEvent.drop(dropzone, {
+    dataTransfer: { files: [makeFile("first.wav"), makeFile("second.wav")] },
+  });
+  await user.click(screen.getByRole("button", { name: "Analyse 2 files" }));
+
+  // The first job is reported before the second upload finishes.
+  await waitFor(() => expect(onJobsCreated).toHaveBeenCalledWith(["job-a"]));
+  expect(onJobsCreated).toHaveBeenCalledTimes(1);
+
+  expect(screen.getByText("Uploads in progress")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+  await user.keyboard("{Escape}");
+  expect(onOpenChange).not.toHaveBeenCalledWith(false);
+
+  releaseSecond?.();
+  await waitFor(() => expect(onJobsCreated).toHaveBeenCalledWith(["job-b"]));
+
+  // The batch is done: the picker is empty again, the progress rows stay.
+  expect(await screen.findByRole("button", { name: "Analyse 0 files" })).toBeDisabled();
+  expect(screen.queryByText("Uploads in progress")).not.toBeInTheDocument();
+  expect(screen.getByRole("progressbar", { name: /first\.wav/ })).toBeInTheDocument();
+  expect(screen.getByRole("progressbar", { name: /second\.wav/ })).toBeInTheDocument();
+});
+
 test("the submit button is disabled until a file is added", () => {
   renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
 

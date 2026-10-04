@@ -161,9 +161,12 @@ function mapEventToStatus(event: JobEvent): JobStatusLike {
         progress_pct: event.data.progress_pct as number | undefined,
       };
     case "progress":
+      // The backend sends the current stage on progress frames too; carry it when present so
+      // a consumer merging statuses never loses the stage label set by the preceding frame.
       return {
         status: "running",
         progress_pct: event.data.progress_pct as number | undefined,
+        ...(typeof event.data.stage === "string" ? { stage: event.data.stage } : {}),
       };
     case "done":
       return {

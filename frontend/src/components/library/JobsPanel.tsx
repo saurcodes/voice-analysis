@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useJobs } from "@/api/hooks";
 import { JobProgressList, type JobProgressItem } from "./JobProgressList";
 
@@ -8,24 +10,40 @@ const VISIBLE_STATUSES = new Set(["queued", "running", "failed"]);
  * entirely when there are none. `excludeIds` lets LibraryPage keep a job started from the
  * currently-open AnalyseDrawer out of this list while that drawer's own JobProgressList is
  * already watching it, so the two don't open a second concurrent SSE connection for the
- * same job. LibraryPage clears that exclusion (and this panel's jobs query gets
- * invalidated) once the drawer closes.
+ * same job.
+ *
+ * Retry: the backend creates a NEW job and leaves the failed one listed as failed. The
+ * failed row is swapped onto the new id in place (its watcher restarts on it) and the new
+ * job is kept out of the list as a separate row, so it is watched exactly once. The swap is
+ * local to this mount: a later visit lists the old job as failed again, as the server does.
  */
 export function JobsPanel({ excludeIds = [] }: { excludeIds?: string[] }) {
   const jobsQuery = useJobs();
+  const queryClient = useQueryClient();
+  const [retried, setRetried] = useState<Record<string, string>>({});
+
   const excluded = new Set(excludeIds);
+  const retryTargets = new Set(Object.values(retried));
   const jobs = (jobsQuery.data ?? []).filter(
-    (job) => VISIBLE_STATUSES.has(job.status) && !excluded.has(job.id),
+    (job) => VISIBLE_STATUSES.has(job.status) && !excluded.has(job.id) && !retryTargets.has(job.id),
   );
 
   if (jobs.length === 0) return null;
 
-  const items: JobProgressItem[] = jobs.map((job) => ({
-    key: job.id,
-    fileName: job.file_name ?? "Untitled recording",
-    jobId: job.id,
-    error: job.status === "failed" ? (job.error ?? "Job failed") : undefined,
-  }));
+  const items: JobProgressItem[] = jobs.map((job) => {
+    const retriedAs = retried[job.id];
+    return {
+      key: job.id,
+      fileName: job.file_name ?? "Untitled recording",
+      jobId: retriedAs ?? job.id,
+      error: !retriedAs && job.status === "failed" ? (job.error ?? "Job failed") : undefined,
+    };
+  });
+
+  function handleRetried(oldJobId: string, newJobId: string) {
+    setRetried((prev) => ({ ...prev, [oldJobId]: newJobId }));
+    void queryClient.invalidateQueries({ queryKey: ["vc", "jobs"] });
+  }
 
   return (
     <section aria-labelledby="jobs-panel-heading" className="mb-6 rounded-lg border border-border bg-card p-4">
@@ -33,7 +51,7 @@ export function JobsPanel({ excludeIds = [] }: { excludeIds?: string[] }) {
         Processing
       </h2>
       <div className="mt-3">
-        <JobProgressList jobs={items} />
+        <JobProgressList jobs={items} onRetried={handleRetried} />
       </div>
     </section>
   );

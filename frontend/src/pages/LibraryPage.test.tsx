@@ -147,7 +147,7 @@ test("Compare is disabled until two rows are selected, then navigates with ids i
   expect(navigateMock).toHaveBeenCalledWith("/compare?ids=row-2,row-1");
 });
 
-test("a failed job row shows Retry, which POSTs a retry", async () => {
+test("a failed job row shows Retry, which POSTs a retry and switches the row onto the new job", async () => {
   const failedJob = jobStatus({
     id: "job-failed-1",
     status: "failed",
@@ -155,17 +155,37 @@ test("a failed job row shows Retry, which POSTs a retry", async () => {
     error: "transcription backend unavailable",
     file_name: "noisy-call.wav",
   });
+  const newJob = jobStatus({
+    id: "job-new-1",
+    status: "running",
+    stage: "analyse",
+    progress_pct: 40,
+    error: null,
+    file_name: "noisy-call.wav",
+  });
+  let retried = false;
   server.use(http.get("/api/analyses", () => HttpResponse.json([])));
-  server.use(http.get("/api/jobs", () => HttpResponse.json([failedJob])));
-  // No SSE body (204, no content): JobProgressList's watchJob falls straight through to
-  // polling GET /api/jobs/:id below, which is what actually reports the failed status here.
-  server.use(http.get("/api/jobs/:id/events", () => new HttpResponse(null, { status: 204 })));
-  server.use(http.get("/api/jobs/:id", () => HttpResponse.json(failedJob)));
+  // After the retry the server lists both: the old failed job and the new running one.
+  server.use(
+    http.get("/api/jobs", () => HttpResponse.json(retried ? [failedJob, newJob] : [failedJob])),
+  );
+  const watchedIds: string[] = [];
+  server.use(
+    http.get("/api/jobs/:id/events", ({ params }) => {
+      watchedIds.push(params.id as string);
+      return new HttpResponse('event: stage\r\ndata: {"stage":"analyse","progress_pct":40}\r\n\r\n', {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }),
+  );
+  server.use(http.get("/api/jobs/:id", () => HttpResponse.json(newJob)));
   let retriedId: string | undefined;
   server.use(
     http.post("/api/jobs/:id/retry", ({ params }) => {
       retriedId = params.id as string;
-      return HttpResponse.json({ job_id: params.id as string }, { status: 202 });
+      retried = true;
+      return HttpResponse.json({ job_id: "job-new-1" }, { status: 202 });
     }),
   );
 
@@ -173,7 +193,45 @@ test("a failed job row shows Retry, which POSTs a retry", async () => {
   renderWithProviders(<LibraryPage />);
 
   expect(await screen.findByText("transcription backend unavailable")).toBeInTheDocument();
+  // A row the jobs list already reports as failed is not watched.
+  expect(watchedIds).toEqual([]);
+
   await user.click(screen.getByRole("button", { name: "Retry" }));
 
   await waitFor(() => expect(retriedId).toBe("job-failed-1"));
+  expect(await screen.findByText("Analysing voice")).toBeInTheDocument();
+  expect(screen.queryByText("transcription backend unavailable")).not.toBeInTheDocument();
+  expect(watchedIds).toEqual(["job-new-1"]);
+  // The new job is shown once, in the swapped row, not as a second row.
+  await waitFor(() => expect(screen.getAllByText("noisy-call.wav")).toHaveLength(1));
+});
+
+test("a retry the server refuses (410) shows its detail inline", async () => {
+  const failedJob = jobStatus({
+    id: "job-failed-2",
+    status: "failed",
+    stage: "extract",
+    error: "decoder crashed",
+    file_name: "old-call.wav",
+  });
+  server.use(http.get("/api/analyses", () => HttpResponse.json([])));
+  server.use(http.get("/api/jobs", () => HttpResponse.json([failedJob])));
+  server.use(
+    http.post("/api/jobs/:id/retry", () =>
+      HttpResponse.json(
+        { detail: "the uploaded file is no longer stored; upload it again" },
+        { status: 410 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+
+  expect(await screen.findByText("decoder crashed")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+
+  expect(
+    await screen.findByText(/the uploaded file is no longer stored; upload it again/),
+  ).toBeInTheDocument();
 });

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AuthProvider as OidcAuthProvider, hasAuthParams, useAuth } from "react-oidc-context";
+import type { User } from "oidc-client-ts";
 import { useNavigate } from "react-router";
 import { oidcConfig } from "./oidc";
 import { AuthContext, TOKEN_SKEW_S, type AuthState, type AuthUser } from "./context";
@@ -26,49 +27,77 @@ interface SigninState {
  * page load of an already-authenticated session, since the persisted User (restored from
  * sessionStorage) still carries whatever returnTo was set during the original signin and
  * would otherwise yank the user back to that old destination on every refresh.
+ *
+ * While a signin callback is still being processed it renders nothing, so the callback URL's
+ * own route ("/") does not flash for a frame before the navigation to returnTo lands. If the
+ * callback fails (not loading, not authenticated) the children render as usual and the
+ * normal unauthenticated flow takes over.
  */
-function SigninCallbackRedirect() {
+function SigninCallbackRedirect({ children }: { children: ReactNode }) {
   const auth = useAuth();
   const navigate = useNavigate();
   const [wasSigninCallback] = useState(() => hasAuthParams());
-  const handled = useRef(false);
+  const [handled, setHandled] = useState(false);
+  const navigated = useRef(false);
 
   useEffect(() => {
-    if (!wasSigninCallback || handled.current || !auth.isAuthenticated) return;
+    if (!wasSigninCallback || navigated.current || !auth.isAuthenticated) return;
+    navigated.current = true;
     const state = auth.user?.state as SigninState | undefined;
     const returnTo = typeof state?.returnTo === "string" ? state.returnTo : "/";
-    handled.current = true;
-    navigate(returnTo, { replace: true });
+    // Children stay hidden until the navigation has been issued; the flag flips in a
+    // microtask after it, so the first frame they render is already at returnTo.
+    void Promise.resolve(navigate(returnTo, { replace: true })).then(() => setHandled(true));
   }, [wasSigninCallback, auth.isAuthenticated, auth.user, navigate]);
 
-  return null;
+  const callbackPending = wasSigninCallback && !handled && (auth.isLoading || auth.isAuthenticated);
+  if (callbackPending) return null;
+  return <>{children}</>;
 }
 
-/** Bridges react-oidc-context's useAuth() into this app's AuthState shape. */
+/**
+ * Bridges react-oidc-context's useAuth() into this app's AuthState shape.
+ *
+ * getToken/signin/signout read the latest useAuth() value through a ref, so their
+ * identities never change: every auth state transition (including each background silent
+ * renew) would otherwise hand consumers new functions, rebuilding the API client and
+ * restarting every job watcher. Concurrent getToken() calls that all find the token
+ * expiring share one in-flight signinSilent() instead of each starting their own.
+ */
 function AuthBridge({ children }: { children: ReactNode }) {
   const auth = useAuth();
+  const authRef = useRef(auth);
+  const renewRef = useRef<Promise<User | null> | null>(null);
+
+  useLayoutEffect(() => {
+    authRef.current = auth;
+  });
 
   const getToken = useCallback(async (): Promise<string> => {
-    const expiresIn = auth.user?.expires_in;
+    const current = authRef.current;
+    const expiresIn = current.user?.expires_in;
     const expiringSoon = expiresIn === undefined || expiresIn < TOKEN_SKEW_S;
-    if (!auth.user?.access_token || expiringSoon) {
-      const renewed = await auth.signinSilent();
+    if (!current.user?.access_token || expiringSoon) {
+      if (!renewRef.current) {
+        renewRef.current = current.signinSilent().finally(() => {
+          renewRef.current = null;
+        });
+      }
+      const renewed = await renewRef.current;
       if (renewed?.access_token) return renewed.access_token;
     }
-    if (!auth.user?.access_token) throw new Error("Not authenticated");
-    return auth.user.access_token;
-  }, [auth]);
+    const latest = authRef.current.user?.access_token ?? current.user?.access_token;
+    if (!latest) throw new Error("Not authenticated");
+    return latest;
+  }, []);
 
-  const signin = useCallback(
-    async (returnTo?: string): Promise<void> => {
-      await auth.signinRedirect({ state: { returnTo: returnTo ?? "/" } });
-    },
-    [auth],
-  );
+  const signin = useCallback(async (returnTo?: string): Promise<void> => {
+    await authRef.current.signinRedirect({ state: { returnTo: returnTo ?? "/" } });
+  }, []);
 
   const signout = useCallback(async (): Promise<void> => {
-    await auth.signoutRedirect();
-  }, [auth]);
+    await authRef.current.signoutRedirect();
+  }, []);
 
   const user = useMemo(() => deriveUser(auth.user?.profile), [auth.user]);
 
@@ -98,8 +127,9 @@ function AuthBridge({ children }: { children: ReactNode }) {
 export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <OidcAuthProvider {...oidcConfig}>
-      <SigninCallbackRedirect />
-      <AuthBridge>{children}</AuthBridge>
+      <AuthBridge>
+        <SigninCallbackRedirect>{children}</SigninCallbackRedirect>
+      </AuthBridge>
     </OidcAuthProvider>
   );
 }

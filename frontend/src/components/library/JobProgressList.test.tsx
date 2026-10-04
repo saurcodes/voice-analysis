@@ -1,4 +1,5 @@
-import { act, screen } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
 import { renderWithProviders } from "@/test/render";
 import { JobProgressList, type JobProgressItem } from "./JobProgressList";
 import * as sse from "@/api/sse";
@@ -89,4 +90,97 @@ test("shows an upload progress row before a job id exists", () => {
   expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "42");
   expect(screen.getByText(/uploading/i)).toBeInTheDocument();
   expect(watchJobMock).not.toHaveBeenCalled();
+});
+
+test("a row queued in a batch reads Waiting, without a percentage", () => {
+  const jobs: JobProgressItem[] = [{ key: "job-6", fileName: "take-six.wav" }];
+  renderWithProviders(<JobProgressList jobs={jobs} />);
+
+  expect(screen.getByText("Waiting")).toBeInTheDocument();
+  expect(screen.queryByText("0%")).not.toBeInTheDocument();
+  expect(screen.queryByText(/uploading/i)).not.toBeInTheDocument();
+});
+
+test("a status without a stage keeps the stage already shown, and done fills the bar", () => {
+  const { emit } = mockWatchJob();
+  const jobs: JobProgressItem[] = [{ key: "job-7", fileName: "take-seven.wav", jobId: "job-7" }];
+  renderWithProviders(<JobProgressList jobs={jobs} />);
+
+  emit({ status: "running", stage: "transcribe", progress_pct: 60 });
+  emit({ status: "running", progress_pct: 70 });
+  expect(screen.getByText("Transcribing")).toBeInTheDocument();
+  expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "70");
+
+  emit({ status: "done", analysis_id: "a-7" });
+  expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+});
+
+test("a row seeded as failed is not watched", () => {
+  mockWatchJob();
+  const jobs: JobProgressItem[] = [
+    { key: "job-8", fileName: "take-eight.wav", jobId: "job-8", error: "decoder crashed" },
+  ];
+  renderWithProviders(<JobProgressList jobs={jobs} />);
+
+  expect(screen.getByText("decoder crashed")).toBeInTheDocument();
+  expect(watchJobMock).not.toHaveBeenCalled();
+});
+
+test("a terminal status refreshes the library and jobs queries", () => {
+  const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+  const { emit } = mockWatchJob();
+  const jobs: JobProgressItem[] = [{ key: "job-9", fileName: "take-nine.wav", jobId: "job-9" }];
+  renderWithProviders(<JobProgressList jobs={jobs} />);
+
+  emit({ status: "running", stage: "analyse", progress_pct: 50 });
+  expect(invalidateSpy).not.toHaveBeenCalled();
+
+  emit({ status: "done", analysis_id: "a-9" });
+  expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vc", "summaries"] });
+  expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vc", "jobs"] });
+  invalidateSpy.mockRestore();
+});
+
+test("with the real watchJob over CRLF frames: Extracting audio, still Extracting audio after progress, then Done", async () => {
+  const actual = await vi.importActual<typeof import("@/api/sse")>("@/api/sse");
+  const encoder = new TextEncoder();
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      streamController = controller;
+    },
+  });
+  const stubAuthFetch = vi.fn(
+    async () =>
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+  );
+  watchJobMock.mockImplementation((jobId, deps, onStatus) =>
+    actual.watchJob(jobId, { ...deps, authFetch: stubAuthFetch }, onStatus),
+  );
+
+  const jobs: JobProgressItem[] = [{ key: "job-10", fileName: "take-ten.wav", jobId: "job-10" }];
+  renderWithProviders(<JobProgressList jobs={jobs} />);
+
+  await act(async () => {
+    streamController?.enqueue(
+      encoder.encode('event: stage\r\ndata: {"stage":"extract","progress_pct":10}\r\n\r\n'),
+    );
+  });
+  expect(await screen.findByText("Extracting audio")).toBeInTheDocument();
+
+  await act(async () => {
+    streamController?.enqueue(
+      encoder.encode('event: progress\r\ndata: {"progress_pct":25,"stage":"extract"}\r\n\r\n'),
+    );
+  });
+  await waitFor(() =>
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25"),
+  );
+  expect(screen.getByText("Extracting audio")).toBeInTheDocument();
+
+  await act(async () => {
+    streamController?.enqueue(encoder.encode('event: done\r\ndata: {"analysis_id":"a-10"}\r\n\r\n'));
+  });
+  expect(await screen.findByText("Done")).toBeInTheDocument();
+  expect(stubAuthFetch).toHaveBeenCalledWith("/api/jobs/job-10/events", expect.anything());
 });

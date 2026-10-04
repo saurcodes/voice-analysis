@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuthState } from "@/auth/context";
 import { ApiError } from "@/api/client";
@@ -28,8 +28,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { JobProgressList, type JobProgressItem } from "./JobProgressList";
 import { UploadDropzone } from "./UploadDropzone";
 
-function rowKey(file: File, index: number): string {
-  return `${file.name}-${file.lastModified}-${index}`;
+function rowKey(batch: number, file: File, index: number): string {
+  return `${batch}-${file.name}-${file.lastModified}-${index}`;
 }
 
 function errorDetail(error: unknown): string {
@@ -65,6 +65,7 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
   const [llmModel, setLlmModel] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [rows, setRows] = useState<JobProgressItem[]>([]);
+  const batchRef = useRef(0);
 
   const llmDisabled = meQuery.data?.llm_enabled === false;
 
@@ -77,6 +78,9 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
   }
 
   function handleOpenChange(next: boolean) {
+    // Closing mid-batch would drop the remaining uploads on the floor: the drawer stays
+    // open (Escape, outside click and the Close button are all blocked) until they finish.
+    if (!next && submitting) return;
     if (!next) {
       void queryClient.invalidateQueries({ queryKey: ["vc", "jobs"] });
       void queryClient.invalidateQueries({ queryKey: ["vc", "summaries"] });
@@ -88,19 +92,21 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
   async function handleSubmit() {
     if (files.length === 0 || submitting) return;
     setSubmitting(true);
+    batchRef.current += 1;
+    const batch = batchRef.current;
 
-    const initialRows: JobProgressItem[] = files.map((file, index) => ({
-      key: rowKey(file, index),
+    // Rows for this batch start as "Waiting" (no uploadPct) and are appended, so rows from an
+    // earlier batch in the same drawer session keep their watchers.
+    const batchRows: JobProgressItem[] = files.map((file, index) => ({
+      key: rowKey(batch, file, index),
       fileName: file.name,
-      uploadPct: 0,
     }));
-    setRows(initialRows);
-
-    const createdJobIds: string[] = [];
+    setRows((prev) => [...prev, ...batchRows]);
 
     for (let index = 0; index < files.length; index++) {
       const file = files[index];
-      const key = rowKey(file, index);
+      const key = rowKey(batch, file, index);
+      setRows((prev) => prev.map((row) => (row.key === key ? { ...row, uploadPct: 0 } : row)));
       try {
         const result = await uploadAnalysis(
           file,
@@ -117,10 +123,15 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
           },
         );
         const jobId = result.job_ids[0];
-        if (jobId) createdJobIds.push(jobId);
         setRows((prev) =>
           prev.map((row) => (row.key === key ? { ...row, jobId, uploadPct: undefined } : row)),
         );
+        // Report each job as soon as it exists (not once after the loop), so the Library's
+        // JobsPanel never double-watches it and picks it up if the drawer is later closed.
+        if (jobId) {
+          onJobsCreated?.([jobId]);
+          void queryClient.invalidateQueries({ queryKey: ["vc", "jobs"] });
+        }
       } catch (error) {
         const message = errorDetail(error);
         setRows((prev) => prev.map((row) => (row.key === key ? { ...row, error: message } : row)));
@@ -128,14 +139,30 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
     }
 
     setSubmitting(false);
-    if (createdJobIds.length > 0) onJobsCreated?.(createdJobIds);
+    // The batch is out of the picker: clear it so the button reads "Analyse 0 files" again.
+    // The progress rows stay.
+    setFiles([]);
+  }
+
+  function handleRetried(_oldJobId: string, newJobId: string) {
+    onJobsCreated?.([newJobId]);
   }
 
   const submitLabel = `Analyse ${files.length} file${files.length === 1 ? "" : "s"}`;
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
-      <SheetContent side="right" className="flex w-full flex-col sm:max-w-xl">
+      <SheetContent
+        side="right"
+        className="flex w-full flex-col sm:max-w-xl"
+        closeDisabled={submitting}
+        onInteractOutside={(event) => {
+          if (submitting) event.preventDefault();
+        }}
+        onEscapeKeyDown={(event) => {
+          if (submitting) event.preventDefault();
+        }}
+      >
         <SheetHeader>
           <SheetTitle>Analyse recordings</SheetTitle>
           <SheetDescription>Upload one or more recordings to analyse.</SheetDescription>
@@ -184,7 +211,6 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
               placeholder="e.g. real estate sales pitch"
               disabled={submitting}
             />
-            <p className="text-xs text-muted-foreground">e.g. real estate sales pitch</p>
           </div>
 
           <div className="flex flex-col gap-2">
@@ -220,12 +246,17 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
           {rows.length > 0 && (
             <div className="flex flex-col gap-2">
               <h3 className="text-sm font-medium">Progress</h3>
-              <JobProgressList jobs={rows} />
+              <JobProgressList jobs={rows} onRetried={handleRetried} />
             </div>
           )}
         </div>
 
         <SheetFooter>
+          {submitting && (
+            <p role="status" className="text-sm text-muted-foreground">
+              Uploads in progress
+            </p>
+          )}
           <Button type="button" onClick={() => void handleSubmit()} disabled={files.length === 0 || submitting}>
             {submitLabel}
           </Button>
