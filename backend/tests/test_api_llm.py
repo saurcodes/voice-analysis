@@ -12,6 +12,7 @@ from tests.api_fixtures import make_test_app
 from tests.fake_llm import FakeProvider
 from tests.test_api_analyses import _upload, fake_job_fn
 from vocal_coach.config import load_config
+from vocal_coach.llm import service
 from vocal_coach.llm.base import LLMError
 
 VALID_COACHING = {
@@ -106,7 +107,7 @@ def test_coach_422_when_model_not_allowed(tmp_path):
         analysis_id = _create_analysis(client, ctx)
         r = client.post(f"/api/analyses/{analysis_id}/coach", headers=ctx["auth"](), json={"model": "nope"})
         assert r.status_code == 422
-        assert "nope" in r.json()["detail"]
+        assert r.json()["detail"] == service.MODEL_NOT_ALLOWED.format(model="nope")
 
 
 def test_coach_200_stores_and_returns_coaching(tmp_path, monkeypatch):
@@ -122,3 +123,18 @@ def test_coach_200_stores_and_returns_coaching(tmp_path, monkeypatch):
         assert body["speaker_context"] == "investor pitch"
         listing = client.get("/api/analyses", headers=ctx["auth"]()).json()
         assert listing[0]["has_coaching"] is True
+
+
+def test_coach_200_with_provider_failure_stores_warning_not_an_error(tmp_path, monkeypatch):
+    # Coaching never fails the request either: a provider failure during a re-run is a 200 with a
+    # stored warning and coaching: null, exactly like the pipeline's degrade path (Review Focus 1).
+    app, ctx = make_test_app(tmp_path, cfg=_cfg(enabled=True, model="test-model"), job_fn=fake_job_fn)
+    monkeypatch.setattr("vocal_coach.llm.service.get_provider",
+                        lambda *a, **k: FakeProvider([LLMError("down")]))
+    with TestClient(app) as client:
+        analysis_id = _create_analysis(client, ctx)
+        r = client.post(f"/api/analyses/{analysis_id}/coach", headers=ctx["auth"]())
+        assert r.status_code == 200
+        body = r.json()
+        assert body["coaching"] is None
+        assert body["coaching_warnings"] == ["coaching failed: down"]

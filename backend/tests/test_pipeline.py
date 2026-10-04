@@ -72,7 +72,7 @@ def test_pipeline_dedupes_same_file_same_config(cfg, session, tmp_path: Path):
     seen = []
     second = run_pipeline(req2, cfg, settings, session, lambda s, p: seen.append(s), whisper_model=_fake())
     assert second == first
-    assert seen == ["download", "extract", "done"]  # no analyse/transcribe on a dedupe hit
+    assert seen == ["download", "extract", "coach", "done"]  # no analyse/transcribe on a dedupe hit
 
 
 @requires_ffmpeg

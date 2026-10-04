@@ -185,8 +185,10 @@ process environment:
 - `LLM_BASE_URL_OVERRIDE`: swaps `llm.base_url` for one value at the process level, for a
   container that cannot resolve `localhost`. Compose sets this to
   `http://host.docker.internal:11434/v1` by default (with `extra_hosts: host-gateway` on the
-  backend service) so a backend running in Docker can reach an Ollama running on the host; unset it
-  (`LLM_BASE_URL_OVERRIDE=` in `.env`) to use `config.yaml`'s `base_url` as-is.
+  backend service) so a backend running in Docker can reach an Ollama running on the host. Set
+  `LLM_BASE_URL_OVERRIDE=` (present but empty) in `.env` to disable the override under compose and
+  use `config.yaml`'s `base_url` as-is: compose's default only applies when the variable is unset
+  entirely, not when it is set to an empty value.
 
 ### Providers
 
@@ -208,7 +210,7 @@ way, `provider: openai_compatible` and `model` (or `allowed_models`) name the pu
 The payload sent to a provider drops `per_phrase`, `per_phrase_end_drop_db` and the transcript's
 `words`/`segments`; it caps `long_pauses`, `eaten_words`, `rushed_runs` and `low_conf_words` to 20
 items each; and it includes a `comparison` block (deltas vs. the user's previous analysis by
-`recorded_at`, or `null` with none exists).
+`recorded_at`, or `null` when none exists).
 
 Two checks run on every answer and add to `coaching_warnings` without ever discarding the stored
 coaching JSON:
@@ -232,4 +234,6 @@ attached; a second failure (or any provider exception: network, auth, HTTP statu
 - `GET /api/me` → `llm_enabled` and `llm_provider` (`null` when disabled) mirror `config.yaml`.
 - `POST /api/analyses/{id}/coach` (body: `{speaker_context?, model?}`) re-runs coaching synchronously
   and returns the updated analysis detail. `404` when the analysis does not exist, `503` when
-  coaching is disabled, `422` when the requested (or configured) model is not in `allowed_models`.
+  coaching is disabled, `422` when the requested (or configured) model is rejected by a non-empty
+  `allowed_models`, or when no model is requested or configured and the provider is not `anthropic`
+  (no default model to fall back to).

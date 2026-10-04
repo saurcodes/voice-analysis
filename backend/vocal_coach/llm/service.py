@@ -48,8 +48,8 @@ def resolve_model(cfg: LLMConfig, requested: str | None) -> tuple[str | None, st
 
 
 def _provider_config(cfg: LLMConfig, settings: Settings) -> LLMConfig:
-    """`cfg` with `base_url` swapped for `settings.llm_base_url_override` when one is set — lets a
-    container reach a host-run Ollama without changing config.yaml."""
+    """`cfg` with `base_url` swapped for `settings.llm_base_url_override` when one is set (lets a
+    container reach a host-run Ollama without changing config.yaml)."""
     if settings.llm_base_url_override:
         return cfg.model_copy(update={"base_url": settings.llm_base_url_override})
     return cfg

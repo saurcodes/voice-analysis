@@ -74,4 +74,6 @@ async def coach(
 
     await asyncio.to_thread(_run)
     row = repo.get_analysis(session, user.id, analysis_id)
+    if row is None:  # deleted by another request while coaching was running
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "analysis not found")
     return to_detail(row)

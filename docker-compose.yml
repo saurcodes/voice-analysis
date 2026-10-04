@@ -56,7 +56,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # config.yaml's llm.base_url defaults to a local Ollama at localhost:11434, which does not
       # resolve inside the container; this points it at the host instead (see backend/README.md).
-      LLM_BASE_URL_OVERRIDE: ${LLM_BASE_URL_OVERRIDE:-http://host.docker.internal:11434/v1}
+      LLM_BASE_URL_OVERRIDE: ${LLM_BASE_URL_OVERRIDE-http://host.docker.internal:11434/v1}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

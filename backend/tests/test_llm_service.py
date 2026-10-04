@@ -153,6 +153,20 @@ def test_coach_analysis_missing_transcript_runs_on_metrics_alone(cfg, session):
     assert "no transcript available for marked_up_example" in updated.coaching_warnings
 
 
+def test_coach_analysis_model_not_allowed_stores_warning_without_calling_the_provider(cfg, session):
+    user = repo.upsert_user(session, "u", None, None)
+    row = _mk(session, user, "a" * 64, utcnow())
+    restricted_cfg = cfg.model_copy(update={"llm": cfg.llm.model_copy(update={"allowed_models": ["x"]})})
+    provider = FakeProvider([VALID_ANSWER])
+
+    updated = service.coach_analysis(session, restricted_cfg, _settings(), user.id, row.id, model="y",
+                                     speaker_context=None, provider=provider)
+
+    assert updated.coaching_json is None
+    assert updated.coaching_warnings == [service.MODEL_NOT_ALLOWED.format(model="y")]
+    assert provider.calls == []  # rejected before the provider was ever called
+
+
 def test_coach_analysis_unknown_analysis_returns_none(cfg, session):
     import uuid
     user = repo.upsert_user(session, "u", None, None)

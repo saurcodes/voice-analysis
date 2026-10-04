@@ -86,6 +86,7 @@ def run_pipeline(
             # then coaching (if requested) re-runs against the existing row with that context.
             if req.speaker_context and req.speaker_context != existing.speaker_context:
                 repo.set_speaker_context(session, req.user_id, existing.id, req.speaker_context)
+            progress("coach", STAGE_PROGRESS["coach"])
             if req.llm_enabled:
                 if cfg.llm.enabled:
                     coach_analysis(session, cfg, settings, req.user_id, existing.id, model=req.llm_model,
