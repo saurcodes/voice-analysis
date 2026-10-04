@@ -37,7 +37,8 @@ function formatValidationErrors(items: unknown[]): string {
     .join("; ");
 }
 
-function detailFromBody(body: unknown): string | unknown {
+/** Exported so upload.ts (XMLHttpRequest, no Response object) can map error bodies the same way. */
+export function detailFromBody(body: unknown): string | unknown {
   if (typeof body !== "object" || body === null || !("detail" in body)) return body;
   const detail = (body as { detail: unknown }).detail;
   if (typeof detail === "string") return detail;

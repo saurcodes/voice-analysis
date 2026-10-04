@@ -1,10 +1,12 @@
 import { http, HttpResponse } from "msw";
 import type { components } from "@/api/types";
+import { analysisDetail, comparison, jobStatus, summary } from "./fixtures";
 
 /**
- * Base MSW handlers for the endpoints every page touches regardless of feature
- * (auth bootstrap, config, LLM availability). Task 3 adds analyses/jobs/comparisons
- * handlers alongside the pages that need them.
+ * MSW handlers for every endpoint the app calls. Covers auth bootstrap, config and LLM
+ * availability (unconditional, feature-independent), plus analyses/jobs/comparisons/upload
+ * for the hooks in src/api/hooks.ts, src/api/upload.ts and src/api/sse.ts. Individual tests
+ * override any of these with server.use(...) for error paths, empty states, etc.
  */
 
 const publicConfig: components["schemas"]["PublicConfig"] = {
@@ -83,8 +85,102 @@ const llmModels: components["schemas"]["LlmModels"] = {
   models: [],
 };
 
+const summaryList: components["schemas"]["AnalysisSummary"][] = [
+  summary(),
+  summary({
+    id: "a1a1a1a1-0000-4000-8000-000000000002",
+    file_name: "follow-up.wav",
+    recorded_at: "2026-09-30T09:15:00Z",
+    analysed_at: "2026-09-30T09:15:35Z",
+  }),
+  summary({
+    id: "a1a1a1a1-0000-4000-8000-000000000003",
+    file_name: "too-quiet.wav",
+    recorded_at: "2026-10-01T11:00:00Z",
+    analysed_at: "2026-10-01T11:00:05Z",
+    has_transcript: false,
+    f0_median_hz: null,
+    f0_range_st: null,
+    flat_pct: null,
+    pauses_per_min: null,
+    articulation_rate_syl_per_sec: null,
+    trailing_off_count: null,
+    fillers_per_min: null,
+  }),
+];
+
+const jobList: components["schemas"]["JobStatus"][] = [
+  jobStatus({ id: "b2b2b2b2-0000-4000-8000-000000000001", status: "running", stage: "analyse", progress_pct: 60 }),
+  jobStatus({
+    id: "b2b2b2b2-0000-4000-8000-000000000002",
+    status: "done",
+    stage: "done",
+    progress_pct: 100,
+    analysis_id: "a1a1a1a1-0000-4000-8000-000000000001",
+  }),
+  jobStatus({
+    id: "b2b2b2b2-0000-4000-8000-000000000003",
+    status: "failed",
+    stage: "transcribe",
+    progress_pct: 70,
+    error: "transcription backend unavailable",
+  }),
+];
+
 export const handlers = [
   http.get("/api/me", () => HttpResponse.json(meResponse)),
   http.get("/api/config/public", () => HttpResponse.json(publicConfig)),
   http.get("/api/llm/models", () => HttpResponse.json(llmModels)),
+
+  http.get("/api/analyses", ({ request }) => {
+    const url = new URL(request.url);
+    const limit = Number(url.searchParams.get("limit") ?? "50");
+    const offset = Number(url.searchParams.get("offset") ?? "0");
+    return HttpResponse.json(summaryList.slice(offset, offset + limit));
+  }),
+
+  http.post("/api/analyses", async ({ request }) => {
+    const form = await request.formData();
+    if (!(form.get("file") instanceof File)) {
+      return HttpResponse.json({ detail: "file is required" }, { status: 422 });
+    }
+    return HttpResponse.json({ job_ids: [jobStatus().id] }, { status: 202 });
+  }),
+
+  http.get("/api/analyses/:id", ({ params }) =>
+    HttpResponse.json(analysisDetail("default", { id: params.id as string })),
+  ),
+
+  http.delete("/api/analyses/:id", () => new HttpResponse(null, { status: 204 })),
+
+  http.get("/api/analyses/:id/raw/:kind", ({ params }) => {
+    const detail = analysisDetail("default", { id: params.id as string });
+    if (params.kind === "transcript") return HttpResponse.json(detail.transcript);
+    return HttpResponse.json(detail.metrics);
+  }),
+
+  http.get("/api/jobs", ({ request }) => {
+    const url = new URL(request.url);
+    const status = url.searchParams.get("status");
+    const jobs = status ? jobList.filter((job) => job.status === status) : jobList;
+    return HttpResponse.json(jobs);
+  }),
+
+  http.get("/api/jobs/:id", ({ params }) => {
+    const job = jobList.find((j) => j.id === params.id) ?? jobStatus({ id: params.id as string });
+    return HttpResponse.json(job);
+  }),
+
+  http.post("/api/jobs/:id/retry", ({ params }) =>
+    HttpResponse.json({ job_id: params.id as string }, { status: 202 }),
+  ),
+
+  http.get("/api/jobs/:id/events", () => {
+    const body =
+      'event: stage\ndata: {"stage":"analyse","progress_pct":50}\n\n' +
+      `event: done\ndata: {"analysis_id":"${analysisDetail().id}"}\n\n`;
+    return new HttpResponse(body, { headers: { "content-type": "text/event-stream" } });
+  }),
+
+  http.get("/api/comparisons", () => HttpResponse.json(comparison())),
 ];
