@@ -16,6 +16,10 @@ export function LibraryPage() {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
+  function handleDeleted(id: string) {
+    setSelectedIds((prev) => prev.filter((x) => x !== id));
+  }
+
   function handleDrawerOpenChange(open: boolean) {
     setDrawerOpen(open);
     if (!open) setTrackedJobIds([]);
@@ -46,6 +50,7 @@ export function LibraryPage() {
           selectedIds={selectedIds}
           onToggleSelected={toggleSelected}
           onAnalyseClick={() => setDrawerOpen(true)}
+          onDeleted={handleDeleted}
         />
       </div>
 

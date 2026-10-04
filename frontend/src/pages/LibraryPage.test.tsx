@@ -73,11 +73,14 @@ test("shows the empty state with an Analyse CTA when there are no analyses", asy
   expect(screen.getAllByRole("button", { name: "Analyse" }).length).toBeGreaterThan(0);
 });
 
-test("delete flow: confirm calls DELETE and the row disappears", async () => {
+test("delete flow: confirm calls DELETE, the row disappears, and its id drops out of the selection", async () => {
   // A mutable backing list: useDeleteAnalysis's onSuccess invalidates ["vc","summaries"],
   // which triggers a real refetch of GET /api/analyses, so that handler has to actually
   // reflect the delete for the row to disappear (a static fixture would just come back).
-  let rows = rowFixtures();
+  let rows = [
+    ...rowFixtures(),
+    summary({ id: "row-3", file_name: "third-take.wav", recorded_at: "2026-10-01T09:00:00Z" }),
+  ];
   server.use(http.get("/api/analyses", () => HttpResponse.json(rows)));
   server.use(http.get("/api/jobs", () => HttpResponse.json([])));
   let deleteCalledWith: string | undefined;
@@ -93,6 +96,13 @@ test("delete flow: confirm calls DELETE and the row disappears", async () => {
   renderWithProviders(<LibraryPage />);
 
   await screen.findByText("practice-run.wav");
+  const compareButton = screen.getByRole("button", { name: "Compare" });
+
+  // Select the row we're about to delete, plus one other, so Compare is enabled going in.
+  await user.click(screen.getByRole("checkbox", { name: "Select practice-run.wav" }));
+  await user.click(screen.getByRole("checkbox", { name: "Select follow-up.wav" }));
+  expect(compareButton).toBeEnabled();
+
   await user.click(screen.getByRole("button", { name: "Delete practice-run.wav" }));
 
   expect(await screen.findByText("Delete this analysis?")).toBeInTheDocument();
@@ -103,6 +113,17 @@ test("delete flow: confirm calls DELETE and the row disappears", async () => {
   await waitFor(() => expect(screen.queryByText("practice-run.wav")).not.toBeInTheDocument());
   expect(deleteCalledWith).toBe("row-1");
   expect(screen.getByText("follow-up.wav")).toBeInTheDocument();
+
+  // The deleted row's id is gone from selection: only one row (follow-up.wav) is still
+  // selected, so Compare is disabled again.
+  expect(compareButton).toBeDisabled();
+
+  // Selecting a third row re-enables Compare, and the deleted id never reappears in the
+  // navigate target.
+  await user.click(screen.getByRole("checkbox", { name: "Select third-take.wav" }));
+  expect(compareButton).toBeEnabled();
+  await user.click(compareButton);
+  expect(navigateMock).toHaveBeenCalledWith("/compare?ids=row-2,row-3");
 });
 
 test("Compare is disabled until two rows are selected, then navigates with ids in selection order", async () => {

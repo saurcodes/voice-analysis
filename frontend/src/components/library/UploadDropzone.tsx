@@ -80,7 +80,7 @@ export function UploadDropzone({
         onDrop={handleDrop}
         className={cn(
           "flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-8 text-center text-sm outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50",
-          dragOver ? "border-accent bg-accent/5" : "border-border",
+          dragOver ? "border-primary bg-primary/5" : "border-border",
           disabled && "pointer-events-none opacity-50",
         )}
       >

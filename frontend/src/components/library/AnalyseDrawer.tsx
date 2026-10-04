@@ -149,7 +149,12 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="flex-1">
-                      <TabsTrigger value="drive" disabled className="pointer-events-none w-full">
+                      <TabsTrigger
+                        value="drive"
+                        disabled
+                        aria-describedby="drive-tab-note"
+                        className="pointer-events-none w-full"
+                      >
                         Google Drive
                       </TabsTrigger>
                     </span>
@@ -158,6 +163,12 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
                 </Tooltip>
               </TooltipProvider>
             </TabsList>
+            {/* Tooltip content only reaches pointer users; a disabled button gets no hover
+                from assistive tech or keyboard focus, so the same explanation is also a
+                plain visible line the disabled trigger's aria-describedby points at. */}
+            <p id="drive-tab-note" className="text-xs text-muted-foreground">
+              Google Drive import is available in a later release
+            </p>
             <TabsContent value="upload">
               <UploadDropzone files={files} onFilesChange={setFiles} disabled={submitting} />
             </TabsContent>

@@ -36,6 +36,7 @@
   --color-card-foreground: var(--foreground);
   --color-popover: var(--card);
   --color-popover-foreground: var(--foreground);
+  /* Brand cobalt = `primary` utilities; `accent` utilities are the neutral hover surface. */
   --color-primary: var(--accent);
   --color-primary-foreground: var(--accent-foreground);
   --color-secondary: var(--muted);

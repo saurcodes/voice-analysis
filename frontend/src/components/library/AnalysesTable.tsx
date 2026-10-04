@@ -60,10 +60,15 @@ export function AnalysesTable({
   selectedIds,
   onToggleSelected,
   onAnalyseClick,
+  onDeleted,
 }: {
   selectedIds: string[];
   onToggleSelected: (id: string) => void;
   onAnalyseClick: () => void;
+  /** Called after a delete succeeds, so the page can drop the id from its own selection
+   * state (otherwise a deleted row's id would linger in selectedIds and Compare could
+   * navigate with a dead id). */
+  onDeleted?: (id: string) => void;
 }) {
   const [limit, setLimit] = useState(PAGE_SIZE);
   const summariesQuery = useSummaries({ limit, offset: 0 });
@@ -82,9 +87,13 @@ export function AnalysesTable({
 
   function confirmDelete() {
     if (!confirmTarget) return;
+    const id = confirmTarget.id;
     setDeleteError(null);
-    deleteAnalysis.mutate(confirmTarget.id, {
-      onSuccess: closeDialog,
+    deleteAnalysis.mutate(id, {
+      onSuccess: () => {
+        closeDialog();
+        onDeleted?.(id);
+      },
       onError: (error) => setDeleteError(errorDetail(error)),
     });
   }
