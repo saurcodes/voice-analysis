@@ -1,0 +1,122 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@theme {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, monospace;
+  --radius: 0.5rem;
+}
+
+/*
+ * Maps shadcn/ui's semantic utility names (bg-primary, ring-ring, ...) onto this app's
+ * locked token set, so every owned component in src/components/ui stays on-contract without
+ * per-file overrides. "@theme inline" re-reads the referenced custom properties at use time,
+ * which is required since --accent and friends change value under the dark theme selectors
+ * below. Radius is a single 8px lock, not a graduated scale: every rounded-sm/md/lg/xl utility
+ * resolves to the same --radius.
+ *
+ * Note: shadcn's own "accent" token conventionally means a neutral hover/selected surface
+ * (dropdown item hover, selected row), not a brand color. This app has exactly one brand
+ * accent (cobalt), reserved for primary actions, links and focus rings, so --color-accent
+ * below maps to the neutral --muted surface, not --accent.
+ */
+@theme inline {
+  --radius-xs: var(--radius);
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius);
+  --radius-xl: var(--radius);
+  --radius-2xl: var(--radius);
+  --radius-3xl: var(--radius);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-foreground);
+  --color-secondary: var(--muted);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--muted);
+  --color-accent-foreground: var(--foreground);
+  --color-destructive: var(--serious);
+  --color-destructive-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--accent);
+  --color-good: var(--good);
+  --color-warning: var(--warning);
+  --color-serious: var(--serious);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+}
+
+:root {
+  color-scheme: light;
+  --background: oklch(0.985 0.002 90);
+  --foreground: oklch(0.2 0.01 260);
+  --muted: oklch(0.95 0.004 260);
+  --muted-foreground: oklch(0.5 0.015 260);
+  --card: oklch(1 0 0);
+  --border: oklch(0.9 0.006 260);
+  --accent: oklch(0.55 0.17 255); /* cobalt: the only accent */
+  --accent-foreground: oklch(0.99 0 0);
+  --good: oklch(0.6 0.15 150); /* status: improved / done */
+  --warning: oklch(0.72 0.15 75); /* status: partial / low confidence */
+  --serious: oklch(0.58 0.2 25); /* status: worsened / failed */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a; /* dataviz reference slots 1-3 (light) */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --background: oklch(0.17 0.006 260);
+    --foreground: oklch(0.95 0.005 260);
+    --muted: oklch(0.23 0.006 260);
+    --muted-foreground: oklch(0.68 0.01 260);
+    --card: oklch(0.2 0.006 260);
+    --border: oklch(0.3 0.008 260);
+    --accent: oklch(0.72 0.14 255);
+    --accent-foreground: oklch(0.15 0.01 260);
+    --good: oklch(0.72 0.14 150);
+    --warning: oklch(0.8 0.13 80);
+    --serious: oklch(0.7 0.17 25);
+    --chart-1: #3987e5;
+    --chart-2: #d95926;
+    --chart-3: #199e70;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: oklch(0.17 0.006 260);
+  --foreground: oklch(0.95 0.005 260);
+  --muted: oklch(0.23 0.006 260);
+  --muted-foreground: oklch(0.68 0.01 260);
+  --card: oklch(0.2 0.006 260);
+  --border: oklch(0.3 0.008 260);
+  --accent: oklch(0.72 0.14 255);
+  --accent-foreground: oklch(0.15 0.01 260);
+  --good: oklch(0.72 0.14 150);
+  --warning: oklch(0.8 0.13 80);
+  --serious: oklch(0.7 0.17 25);
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+}
+
+body {
+  @apply bg-[var(--background)] text-[var(--foreground)] font-sans antialiased;
+}
+
+.num {
+  @apply font-mono tabular-nums;
+}

@@ -1,0 +1,2780 @@
+{
+  "components": {
+    "schemas": {
+      "AnalysisConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "creak_threshold_hz": {
+            "title": "Creak Threshold Hz",
+            "type": "number"
+          },
+          "energy_window_s": {
+            "title": "Energy Window S",
+            "type": "number"
+          },
+          "intonation_tail_s": {
+            "title": "Intonation Tail S",
+            "type": "number"
+          },
+          "intonation_threshold_st": {
+            "title": "Intonation Threshold St",
+            "type": "number"
+          },
+          "low_confidence_f0_hz": {
+            "title": "Low Confidence F0 Hz",
+            "type": "number"
+          },
+          "low_confidence_noise_floor_db": {
+            "title": "Low Confidence Noise Floor Db",
+            "type": "number"
+          },
+          "low_confidence_snr_db": {
+            "title": "Low Confidence Snr Db",
+            "type": "number"
+          },
+          "min_duration_s": {
+            "title": "Min Duration S",
+            "type": "number"
+          },
+          "min_pause_s": {
+            "title": "Min Pause S",
+            "type": "number"
+          },
+          "min_sounding_s": {
+            "title": "Min Sounding S",
+            "type": "number"
+          },
+          "noise_floor_percentile": {
+            "title": "Noise Floor Percentile",
+            "type": "number"
+          },
+          "opening_window_s": {
+            "title": "Opening Window S",
+            "type": "number"
+          },
+          "phrase_end_tail_s": {
+            "title": "Phrase End Tail S",
+            "type": "number"
+          },
+          "pitch_ceiling_hz": {
+            "title": "Pitch Ceiling Hz",
+            "type": "number"
+          },
+          "pitch_floor_hz": {
+            "title": "Pitch Floor Hz",
+            "type": "number"
+          },
+          "silence_threshold_db": {
+            "title": "Silence Threshold Db",
+            "type": "number"
+          },
+          "syllable_peak_prominence_db": {
+            "title": "Syllable Peak Prominence Db",
+            "type": "number"
+          },
+          "time_step_s": {
+            "title": "Time Step S",
+            "type": "number"
+          },
+          "trailing_off_drop_db": {
+            "title": "Trailing Off Drop Db",
+            "type": "number"
+          }
+        },
+        "required": [
+          "pitch_floor_hz",
+          "pitch_ceiling_hz",
+          "time_step_s",
+          "silence_threshold_db",
+          "min_pause_s",
+          "min_sounding_s",
+          "creak_threshold_hz",
+          "opening_window_s",
+          "syllable_peak_prominence_db",
+          "intonation_tail_s",
+          "intonation_threshold_st",
+          "energy_window_s",
+          "phrase_end_tail_s",
+          "trailing_off_drop_db",
+          "noise_floor_percentile",
+          "low_confidence_noise_floor_db",
+          "low_confidence_snr_db",
+          "low_confidence_f0_hz",
+          "min_duration_s"
+        ],
+        "title": "AnalysisConfig",
+        "type": "object"
+      },
+      "AnalysisDetail": {
+        "properties": {
+          "analysed_at": {
+            "format": "date-time",
+            "title": "Analysed At",
+            "type": "string"
+          },
+          "analyser_version": {
+            "title": "Analyser Version",
+            "type": "string"
+          },
+          "coaching": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coaching"
+          },
+          "coaching_warnings": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coaching Warnings"
+          },
+          "config_hash": {
+            "title": "Config Hash",
+            "type": "string"
+          },
+          "drive_file_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drive File Id"
+          },
+          "file_name": {
+            "title": "File Name",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/MetricsReport"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "speaker_context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speaker Context"
+          },
+          "transcript": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Transcript"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "file_name",
+          "drive_file_id",
+          "recorded_at",
+          "analysed_at",
+          "analyser_version",
+          "config_hash",
+          "metrics",
+          "transcript",
+          "speaker_context",
+          "coaching",
+          "coaching_warnings"
+        ],
+        "title": "AnalysisDetail",
+        "type": "object"
+      },
+      "AnalysisSummary": {
+        "description": "One analyses-list row: scalar columns plus a few headline metrics, without the JSON blobs.",
+        "properties": {
+          "analysed_at": {
+            "format": "date-time",
+            "title": "Analysed At",
+            "type": "string"
+          },
+          "analyser_version": {
+            "title": "Analyser Version",
+            "type": "string"
+          },
+          "articulation_rate_syl_per_sec": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Articulation Rate Syl Per Sec"
+          },
+          "config_hash": {
+            "title": "Config Hash",
+            "type": "string"
+          },
+          "drive_file_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drive File Id"
+          },
+          "f0_median_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F0 Median Hz"
+          },
+          "f0_range_st": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F0 Range St"
+          },
+          "file_name": {
+            "title": "File Name",
+            "type": "string"
+          },
+          "fillers_per_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fillers Per Min"
+          },
+          "flat_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flat Pct"
+          },
+          "has_coaching": {
+            "title": "Has Coaching",
+            "type": "boolean"
+          },
+          "has_transcript": {
+            "title": "Has Transcript",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "pauses_per_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pauses Per Min"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "trailing_off_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailing Off Count"
+          }
+        },
+        "required": [
+          "id",
+          "file_name",
+          "drive_file_id",
+          "recorded_at",
+          "analysed_at",
+          "analyser_version",
+          "config_hash",
+          "has_transcript",
+          "has_coaching",
+          "f0_median_hz",
+          "f0_range_st",
+          "flat_pct",
+          "pauses_per_min",
+          "articulation_rate_syl_per_sec",
+          "trailing_off_count",
+          "fillers_per_min"
+        ],
+        "title": "AnalysisSummary",
+        "type": "object"
+      },
+      "ArticulationBlock": {
+        "properties": {
+          "hf_energy_ratio_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hf Energy Ratio Db"
+          },
+          "low_confidence": {
+            "title": "Low Confidence",
+            "type": "boolean"
+          },
+          "modulation_depth": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modulation Depth"
+          },
+          "spectral_tilt_db_per_oct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spectral Tilt Db Per Oct"
+          },
+          "syllable_peak_prominence_mean_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Syllable Peak Prominence Mean Db"
+          },
+          "syllable_peak_prominence_p25_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Syllable Peak Prominence P25 Db"
+          },
+          "vowel_space": {
+            "$ref": "#/components/schemas/VowelSpace"
+          },
+          "weak_peak_fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weak Peak Fraction"
+          }
+        },
+        "required": [
+          "hf_energy_ratio_db",
+          "spectral_tilt_db_per_oct",
+          "modulation_depth",
+          "syllable_peak_prominence_mean_db",
+          "syllable_peak_prominence_p25_db",
+          "weak_peak_fraction",
+          "vowel_space",
+          "low_confidence"
+        ],
+        "title": "ArticulationBlock",
+        "type": "object"
+      },
+      "ArticulationConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "formant_max_hz": {
+            "title": "Formant Max Hz",
+            "type": "number"
+          },
+          "formant_trim_pct": {
+            "title": "Formant Trim Pct",
+            "type": "number"
+          },
+          "hf_band_hz": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Hf Band Hz",
+            "type": "array"
+          },
+          "lf_band_hz": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Lf Band Hz",
+            "type": "array"
+          },
+          "modulation_band_hz": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Modulation Band Hz",
+            "type": "array"
+          },
+          "weak_peak_prominence_db": {
+            "title": "Weak Peak Prominence Db",
+            "type": "number"
+          }
+        },
+        "required": [
+          "hf_band_hz",
+          "lf_band_hz",
+          "modulation_band_hz",
+          "weak_peak_prominence_db",
+          "formant_max_hz",
+          "formant_trim_pct"
+        ],
+        "title": "ArticulationConfig",
+        "type": "object"
+      },
+      "ClarityBlock": {
+        "properties": {
+          "eaten_words": {
+            "items": {
+              "$ref": "#/components/schemas/EatenWord"
+            },
+            "title": "Eaten Words",
+            "type": "array"
+          },
+          "low_conf_word_fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Low Conf Word Fraction"
+          },
+          "low_conf_words": {
+            "items": {
+              "$ref": "#/components/schemas/LowConfWord"
+            },
+            "title": "Low Conf Words",
+            "type": "array"
+          },
+          "low_logprob_segment_fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Low Logprob Segment Fraction"
+          },
+          "rushed_runs": {
+            "items": {
+              "$ref": "#/components/schemas/Span"
+            },
+            "title": "Rushed Runs",
+            "type": "array"
+          },
+          "rushed_word_fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rushed Word Fraction"
+          },
+          "segment_avg_logprob_mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment Avg Logprob Mean"
+          },
+          "word_final_drop_count": {
+            "title": "Word Final Drop Count",
+            "type": "integer"
+          },
+          "word_final_drop_fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Word Final Drop Fraction"
+          }
+        },
+        "required": [
+          "low_conf_word_fraction",
+          "low_conf_words",
+          "word_final_drop_count",
+          "word_final_drop_fraction",
+          "eaten_words",
+          "rushed_word_fraction",
+          "rushed_runs",
+          "segment_avg_logprob_mean",
+          "low_logprob_segment_fraction"
+        ],
+        "title": "ClarityBlock",
+        "type": "object"
+      },
+      "ClarityConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "low_conf_word_prob": {
+            "title": "Low Conf Word Prob",
+            "type": "number"
+          },
+          "low_logprob_segment": {
+            "title": "Low Logprob Segment",
+            "type": "number"
+          },
+          "min_word_duration_s": {
+            "title": "Min Word Duration S",
+            "type": "number"
+          },
+          "rushed_run_min_words": {
+            "title": "Rushed Run Min Words",
+            "type": "integer"
+          },
+          "rushed_syl_per_sec": {
+            "title": "Rushed Syl Per Sec",
+            "type": "number"
+          },
+          "word_final_drop_db": {
+            "title": "Word Final Drop Db",
+            "type": "number"
+          },
+          "word_final_tail_fraction": {
+            "title": "Word Final Tail Fraction",
+            "type": "number"
+          }
+        },
+        "required": [
+          "low_conf_word_prob",
+          "word_final_drop_db",
+          "word_final_tail_fraction",
+          "min_word_duration_s",
+          "rushed_syl_per_sec",
+          "rushed_run_min_words",
+          "low_logprob_segment"
+        ],
+        "title": "ClarityConfig",
+        "type": "object"
+      },
+      "ComparisonConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "directions": {
+            "additionalProperties": {
+              "enum": [
+                "up_good",
+                "down_good",
+                "neutral"
+              ],
+              "type": "string"
+            },
+            "title": "Directions",
+            "type": "object"
+          },
+          "min_meaningful_change_pct": {
+            "exclusiveMinimum": 0.0,
+            "title": "Min Meaningful Change Pct",
+            "type": "number"
+          }
+        },
+        "required": [
+          "min_meaningful_change_pct",
+          "directions"
+        ],
+        "title": "ComparisonConfig",
+        "type": "object"
+      },
+      "ComparisonResult": {
+        "properties": {
+          "analyser_version_mismatch": {
+            "title": "Analyser Version Mismatch",
+            "type": "boolean"
+          },
+          "analysis_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Analysis Ids",
+            "type": "array"
+          },
+          "config_mismatch": {
+            "title": "Config Mismatch",
+            "type": "boolean"
+          },
+          "recorded_at": {
+            "items": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "title": "Recorded At",
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "trend": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/TrendPoint"
+              },
+              "type": "array"
+            },
+            "title": "Trend",
+            "type": "object"
+          }
+        },
+        "required": [
+          "analysis_ids",
+          "recorded_at",
+          "config_mismatch",
+          "analyser_version_mismatch",
+          "rows",
+          "trend"
+        ],
+        "title": "ComparisonResult",
+        "type": "object"
+      },
+      "ComparisonRow": {
+        "properties": {
+          "arrow": {
+            "title": "Arrow",
+            "type": "string"
+          },
+          "delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
+          },
+          "direction": {
+            "enum": [
+              "up_good",
+              "down_good",
+              "neutral"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "partial": {
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "step_deltas": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Step Deltas",
+            "type": "array"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Values",
+            "type": "array"
+          },
+          "verdict": {
+            "enum": [
+              "improved",
+              "worsened",
+              "neutral",
+              "unchanged",
+              "unavailable"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "direction",
+          "values",
+          "step_deltas",
+          "delta",
+          "arrow",
+          "verdict",
+          "partial"
+        ],
+        "title": "ComparisonRow",
+        "type": "object"
+      },
+      "DerivedBlock": {
+        "properties": {
+          "clarity": {
+            "$ref": "#/components/schemas/ClarityBlock"
+          },
+          "filler_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Filler Counts",
+            "type": "object"
+          },
+          "filler_total": {
+            "title": "Filler Total",
+            "type": "integer"
+          },
+          "fillers_per_min": {
+            "title": "Fillers Per Min",
+            "type": "number"
+          },
+          "word_count": {
+            "title": "Word Count",
+            "type": "integer"
+          },
+          "words_per_min": {
+            "title": "Words Per Min",
+            "type": "number"
+          }
+        },
+        "required": [
+          "word_count",
+          "words_per_min",
+          "filler_counts",
+          "filler_total",
+          "fillers_per_min",
+          "clarity"
+        ],
+        "title": "DerivedBlock",
+        "type": "object"
+      },
+      "EatenWord": {
+        "properties": {
+          "drop_db": {
+            "title": "Drop Db",
+            "type": "number"
+          },
+          "end_s": {
+            "title": "End S",
+            "type": "number"
+          },
+          "start_s": {
+            "title": "Start S",
+            "type": "number"
+          },
+          "word": {
+            "title": "Word",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_s",
+          "end_s",
+          "word",
+          "drop_db"
+        ],
+        "title": "EatenWord",
+        "type": "object"
+      },
+      "EnergyBlock": {
+        "properties": {
+          "body_median_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body Median Db"
+          },
+          "final_15s_median_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final 15S Median Db"
+          },
+          "final_vs_body_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Vs Body Db"
+          },
+          "per_phrase_end_drop_db": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Per Phrase End Drop Db",
+            "type": "array"
+          },
+          "trailing_off_count": {
+            "title": "Trailing Off Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "body_median_db",
+          "final_15s_median_db",
+          "final_vs_body_db",
+          "trailing_off_count",
+          "per_phrase_end_drop_db"
+        ],
+        "title": "EnergyBlock",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Interval": {
+        "properties": {
+          "duration_s": {
+            "title": "Duration S",
+            "type": "number"
+          },
+          "end_s": {
+            "title": "End S",
+            "type": "number"
+          },
+          "start_s": {
+            "title": "Start S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "start_s",
+          "end_s",
+          "duration_s"
+        ],
+        "title": "Interval",
+        "type": "object"
+      },
+      "IntonationBlock": {
+        "properties": {
+          "down_count": {
+            "title": "Down Count",
+            "type": "integer"
+          },
+          "flat_count": {
+            "title": "Flat Count",
+            "type": "integer"
+          },
+          "flat_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flat Pct"
+          },
+          "per_phrase": {
+            "items": {
+              "$ref": "#/components/schemas/PhraseContour"
+            },
+            "title": "Per Phrase",
+            "type": "array"
+          },
+          "unclassified_count": {
+            "title": "Unclassified Count",
+            "type": "integer"
+          },
+          "up_count": {
+            "title": "Up Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "up_count",
+          "down_count",
+          "flat_count",
+          "unclassified_count",
+          "flat_pct",
+          "per_phrase"
+        ],
+        "title": "IntonationBlock",
+        "type": "object"
+      },
+      "JobId": {
+        "properties": {
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "JobId",
+        "type": "object"
+      },
+      "JobIds": {
+        "properties": {
+          "job_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Job Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "job_ids"
+        ],
+        "title": "JobIds",
+        "type": "object"
+      },
+      "JobStatus": {
+        "properties": {
+          "analysis_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "progress_pct": {
+            "title": "Progress Pct",
+            "type": "integer"
+          },
+          "stage": {
+            "enum": [
+              "download",
+              "extract",
+              "analyse",
+              "transcribe",
+              "coach",
+              "done"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "stage",
+          "progress_pct",
+          "error",
+          "analysis_id",
+          "file_name",
+          "created_at"
+        ],
+        "title": "JobStatus",
+        "type": "object"
+      },
+      "LlmModels": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "enabled",
+          "provider",
+          "models"
+        ],
+        "title": "LlmModels",
+        "type": "object"
+      },
+      "LowConfWord": {
+        "properties": {
+          "end_s": {
+            "title": "End S",
+            "type": "number"
+          },
+          "probability": {
+            "title": "Probability",
+            "type": "number"
+          },
+          "start_s": {
+            "title": "Start S",
+            "type": "number"
+          },
+          "word": {
+            "title": "Word",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_s",
+          "end_s",
+          "word",
+          "probability"
+        ],
+        "title": "LowConfWord",
+        "type": "object"
+      },
+      "MeResponse": {
+        "properties": {
+          "drive_connected": {
+            "title": "Drive Connected",
+            "type": "boolean"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "llm_enabled": {
+            "title": "Llm Enabled",
+            "type": "boolean"
+          },
+          "llm_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Provider"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "username",
+          "drive_connected",
+          "llm_enabled",
+          "llm_provider"
+        ],
+        "title": "MeResponse",
+        "type": "object"
+      },
+      "MetricsReport": {
+        "properties": {
+          "analyser_version": {
+            "title": "Analyser Version",
+            "type": "string"
+          },
+          "articulation": {
+            "$ref": "#/components/schemas/ArticulationBlock"
+          },
+          "config_hash": {
+            "title": "Config Hash",
+            "type": "string"
+          },
+          "energy": {
+            "$ref": "#/components/schemas/EnergyBlock"
+          },
+          "intonation": {
+            "$ref": "#/components/schemas/IntonationBlock"
+          },
+          "pace": {
+            "$ref": "#/components/schemas/PaceBlock"
+          },
+          "phrasing": {
+            "$ref": "#/components/schemas/PhrasingBlock"
+          },
+          "pitch": {
+            "$ref": "#/components/schemas/PitchBlock"
+          },
+          "recording_quality": {
+            "$ref": "#/components/schemas/RecordingQualityBlock"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceInfo"
+          },
+          "timeline": {
+            "$ref": "#/components/schemas/TimelineBlock"
+          },
+          "voice_quality": {
+            "$ref": "#/components/schemas/VoiceQualityBlock"
+          }
+        },
+        "required": [
+          "schema_version",
+          "analyser_version",
+          "config_hash",
+          "source",
+          "recording_quality",
+          "pitch",
+          "phrasing",
+          "pace",
+          "intonation",
+          "energy",
+          "voice_quality",
+          "articulation",
+          "timeline"
+        ],
+        "title": "MetricsReport",
+        "type": "object"
+      },
+      "PaceBlock": {
+        "properties": {
+          "articulation_rate_syl_per_sec": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Articulation Rate Syl Per Sec"
+          },
+          "syllable_count_est": {
+            "title": "Syllable Count Est",
+            "type": "integer"
+          },
+          "syllables_per_sec_overall": {
+            "title": "Syllables Per Sec Overall",
+            "type": "number"
+          }
+        },
+        "required": [
+          "syllable_count_est",
+          "syllables_per_sec_overall",
+          "articulation_rate_syl_per_sec"
+        ],
+        "title": "PaceBlock",
+        "type": "object"
+      },
+      "PhraseContour": {
+        "properties": {
+          "class": {
+            "enum": [
+              "up",
+              "down",
+              "flat"
+            ],
+            "title": "Class",
+            "type": "string"
+          },
+          "end_delta_st": {
+            "title": "End Delta St",
+            "type": "number"
+          },
+          "end_s": {
+            "title": "End S",
+            "type": "number"
+          },
+          "start_s": {
+            "title": "Start S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "start_s",
+          "end_s",
+          "end_delta_st",
+          "class"
+        ],
+        "title": "PhraseContour",
+        "type": "object"
+      },
+      "PhrasingBlock": {
+        "properties": {
+          "long_pause_count_ge_1s": {
+            "title": "Long Pause Count Ge 1S",
+            "type": "integer"
+          },
+          "long_pauses": {
+            "items": {
+              "$ref": "#/components/schemas/Interval"
+            },
+            "title": "Long Pauses",
+            "type": "array"
+          },
+          "mean_pause_length_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Pause Length S"
+          },
+          "mean_phrase_length_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Phrase Length S"
+          },
+          "pause_count": {
+            "title": "Pause Count",
+            "type": "integer"
+          },
+          "pauses_per_min": {
+            "title": "Pauses Per Min",
+            "type": "number"
+          },
+          "phrase_count": {
+            "title": "Phrase Count",
+            "type": "integer"
+          },
+          "speaking_time_s": {
+            "title": "Speaking Time S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "phrase_count",
+          "speaking_time_s",
+          "mean_phrase_length_s",
+          "pause_count",
+          "pauses_per_min",
+          "mean_pause_length_s",
+          "long_pause_count_ge_1s",
+          "long_pauses"
+        ],
+        "title": "PhrasingBlock",
+        "type": "object"
+      },
+      "PitchBlock": {
+        "properties": {
+          "creak_fraction_below_100hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creak Fraction Below 100Hz"
+          },
+          "f0_median_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F0 Median Hz"
+          },
+          "f0_p10_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F0 P10 Hz"
+          },
+          "f0_p90_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F0 P90 Hz"
+          },
+          "f0_range_st": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F0 Range St"
+          },
+          "opening_f0_median_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening F0 Median Hz"
+          },
+          "opening_vs_overall_st": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Vs Overall St"
+          },
+          "voiced_fraction": {
+            "title": "Voiced Fraction",
+            "type": "number"
+          }
+        },
+        "required": [
+          "f0_median_hz",
+          "f0_p10_hz",
+          "f0_p90_hz",
+          "f0_range_st",
+          "voiced_fraction",
+          "creak_fraction_below_100hz",
+          "opening_f0_median_hz",
+          "opening_vs_overall_st"
+        ],
+        "title": "PitchBlock",
+        "type": "object"
+      },
+      "PublicConfig": {
+        "properties": {
+          "analysis": {
+            "$ref": "#/components/schemas/AnalysisConfig"
+          },
+          "articulation": {
+            "$ref": "#/components/schemas/ArticulationConfig"
+          },
+          "clarity": {
+            "$ref": "#/components/schemas/ClarityConfig"
+          },
+          "comparison": {
+            "$ref": "#/components/schemas/ComparisonConfig"
+          }
+        },
+        "required": [
+          "analysis",
+          "articulation",
+          "clarity",
+          "comparison"
+        ],
+        "title": "PublicConfig",
+        "type": "object"
+      },
+      "RecordingQualityBlock": {
+        "properties": {
+          "low_confidence": {
+            "title": "Low Confidence",
+            "type": "boolean"
+          },
+          "noise_floor_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Noise Floor Db"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "snr_estimate_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snr Estimate Db"
+          }
+        },
+        "required": [
+          "noise_floor_db",
+          "snr_estimate_db",
+          "low_confidence",
+          "reasons"
+        ],
+        "title": "RecordingQualityBlock",
+        "type": "object"
+      },
+      "SourceInfo": {
+        "properties": {
+          "content_sha256": {
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "drive_file_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drive File Id"
+          },
+          "drive_modified_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drive Modified Time"
+          },
+          "duration_s": {
+            "title": "Duration S",
+            "type": "number"
+          },
+          "file_name": {
+            "title": "File Name",
+            "type": "string"
+          },
+          "original_channels": {
+            "title": "Original Channels",
+            "type": "integer"
+          },
+          "original_sample_rate": {
+            "title": "Original Sample Rate",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "file_name",
+          "drive_file_id",
+          "drive_modified_time",
+          "content_sha256",
+          "duration_s",
+          "original_channels",
+          "original_sample_rate"
+        ],
+        "title": "SourceInfo",
+        "type": "object"
+      },
+      "Span": {
+        "properties": {
+          "end_s": {
+            "title": "End S",
+            "type": "number"
+          },
+          "start_s": {
+            "title": "Start S",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_s",
+          "end_s",
+          "text"
+        ],
+        "title": "Span",
+        "type": "object"
+      },
+      "TimelineBlock": {
+        "properties": {
+          "window_s": {
+            "title": "Window S",
+            "type": "number"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "window_s",
+          "windows"
+        ],
+        "title": "TimelineBlock",
+        "type": "object"
+      },
+      "TimelineWindow": {
+        "properties": {
+          "end_s": {
+            "title": "End S",
+            "type": "number"
+          },
+          "f0_median_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F0 Median Hz"
+          },
+          "f0_sd_st": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F0 Sd St"
+          },
+          "intensity_median_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intensity Median Db"
+          },
+          "start_s": {
+            "title": "Start S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "start_s",
+          "end_s",
+          "f0_median_hz",
+          "f0_sd_st",
+          "intensity_median_db"
+        ],
+        "title": "TimelineWindow",
+        "type": "object"
+      },
+      "Transcript": {
+        "properties": {
+          "derived": {
+            "$ref": "#/components/schemas/DerivedBlock"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSegment"
+            },
+            "title": "Segments",
+            "type": "array"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "words": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptWord"
+            },
+            "title": "Words",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "model",
+          "language",
+          "text",
+          "segments",
+          "words",
+          "derived"
+        ],
+        "title": "Transcript",
+        "type": "object"
+      },
+      "TranscriptSegment": {
+        "properties": {
+          "avg_logprob": {
+            "title": "Avg Logprob",
+            "type": "number"
+          },
+          "end_s": {
+            "title": "End S",
+            "type": "number"
+          },
+          "no_speech_prob": {
+            "title": "No Speech Prob",
+            "type": "number"
+          },
+          "start_s": {
+            "title": "Start S",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_s",
+          "end_s",
+          "text",
+          "avg_logprob",
+          "no_speech_prob"
+        ],
+        "title": "TranscriptSegment",
+        "type": "object"
+      },
+      "TranscriptWord": {
+        "properties": {
+          "end_s": {
+            "title": "End S",
+            "type": "number"
+          },
+          "probability": {
+            "title": "Probability",
+            "type": "number"
+          },
+          "start_s": {
+            "title": "Start S",
+            "type": "number"
+          },
+          "word": {
+            "title": "Word",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_s",
+          "end_s",
+          "word",
+          "probability"
+        ],
+        "title": "TranscriptWord",
+        "type": "object"
+      },
+      "TrendPoint": {
+        "properties": {
+          "analysis_id": {
+            "title": "Analysis Id",
+            "type": "string"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "analysis_id",
+          "recorded_at",
+          "value"
+        ],
+        "title": "TrendPoint",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "VoiceQualityBlock": {
+        "properties": {
+          "hnr_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hnr Db"
+          },
+          "jitter_local": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jitter Local"
+          },
+          "low_confidence": {
+            "title": "Low Confidence",
+            "type": "boolean"
+          },
+          "shimmer_local": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shimmer Local"
+          }
+        },
+        "required": [
+          "hnr_db",
+          "jitter_local",
+          "shimmer_local",
+          "low_confidence"
+        ],
+        "title": "VoiceQualityBlock",
+        "type": "object"
+      },
+      "VowelSpace": {
+        "properties": {
+          "f1_sd_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F1 Sd Hz"
+          },
+          "f2_sd_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F2 Sd Hz"
+          },
+          "vowel_dispersion_st": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vowel Dispersion St"
+          },
+          "vowel_space_area_hz2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vowel Space Area Hz2"
+          }
+        },
+        "required": [
+          "f1_sd_hz",
+          "f2_sd_hz",
+          "vowel_space_area_hz2",
+          "vowel_dispersion_st"
+        ],
+        "title": "VowelSpace",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "Vocal Coach API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/analyses": {
+      "get": {
+        "operationId": "list_analyses_api_analyses_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AnalysisSummary"
+                  },
+                  "title": "Response List Analyses Api Analyses Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Analyses",
+        "tags": [
+          "analyses"
+        ]
+      },
+      "post": {
+        "operationId": "create_analysis_api_analyses_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "properties": {
+                  "file": {
+                    "format": "binary",
+                    "type": "string"
+                  },
+                  "llm_enabled": {
+                    "type": "boolean"
+                  },
+                  "llm_model": {
+                    "type": "string"
+                  },
+                  "recorded_at": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "speaker_context": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobIds"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "413": {
+            "description": "file too large"
+          },
+          "415": {
+            "description": "unsupported file type"
+          },
+          "501": {
+            "description": "Drive source not available yet"
+          },
+          "503": {
+            "description": "job runner unavailable"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Analysis",
+        "tags": [
+          "analyses"
+        ]
+      }
+    },
+    "/api/analyses/{analysis_id}": {
+      "delete": {
+        "operationId": "delete_analysis_api_analyses__analysis_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "analysis_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Analysis Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Analysis",
+        "tags": [
+          "analyses"
+        ]
+      },
+      "get": {
+        "operationId": "get_analysis_api_analyses__analysis_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "analysis_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Analysis Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Analysis",
+        "tags": [
+          "analyses"
+        ]
+      }
+    },
+    "/api/analyses/{analysis_id}/coach": {
+      "post": {
+        "operationId": "coach_api_analyses__analysis_id__coach_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "analysis_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Analysis Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "analysis not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "501": {
+            "description": "coaching is not available yet"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Coach",
+        "tags": [
+          "llm"
+        ]
+      }
+    },
+    "/api/analyses/{analysis_id}/raw/{kind}": {
+      "get": {
+        "operationId": "get_raw_api_analyses__analysis_id__raw__kind__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "analysis_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Analysis Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Raw",
+        "tags": [
+          "analyses"
+        ]
+      }
+    },
+    "/api/comparisons": {
+      "get": {
+        "operationId": "get_comparison_api_comparisons_get",
+        "parameters": [
+          {
+            "description": "comma-separated analysis ids",
+            "in": "query",
+            "name": "ids",
+            "required": true,
+            "schema": {
+              "description": "comma-separated analysis ids",
+              "title": "Ids",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComparisonResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Comparison",
+        "tags": [
+          "comparisons"
+        ]
+      }
+    },
+    "/api/config/public": {
+      "get": {
+        "operationId": "config_public_api_config_public_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicConfig"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Config Public",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "operationId": "list_jobs_api_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "queued",
+                    "running",
+                    "done",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobStatus"
+                  },
+                  "title": "Response List Jobs Api Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Jobs",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_api_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/events": {
+      "get": {
+        "operationId": "job_event_stream_api_jobs__job_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Job Event Stream",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/retry": {
+      "post": {
+        "operationId": "retry_job_api_jobs__job_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobId"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "job not found"
+          },
+          "409": {
+            "description": "job is not finished"
+          },
+          "410": {
+            "description": "the uploaded file is no longer stored"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "job runner unavailable"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Retry Job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/llm/models": {
+      "get": {
+        "operationId": "list_models_api_llm_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmModels"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Models",
+        "tags": [
+          "llm"
+        ]
+      }
+    },
+    "/api/me": {
+      "get": {
+        "operationId": "me_api_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Me",
+        "tags": [
+          "me"
+        ]
+      }
+    }
+  }
+}
