@@ -29,6 +29,12 @@ def test_empty_example_with_no_transcript_returns_none():
     assert check_marked_up_example("   ", "") is None
 
 
+def test_punctuation_only_example_returns_mismatch_warning():
+    transcript = "So we will win today, right?"
+    assert check_marked_up_example("!!!", transcript) == "marked_up_example does not match the transcript"
+    assert check_marked_up_example("// ↘", transcript) == "marked_up_example does not match the transcript"
+
+
 def test_demark_removes_marks_lowercases_and_keeps_apostrophes_inside_words():
     assert demark("Don't // stop ↘ now.") == ["don't", "stop", "now"]
 

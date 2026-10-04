@@ -37,6 +37,10 @@ def check_marked_up_example(example: str, transcript_text: str | None) -> str | 
         return "marked_up_example is empty"
 
     example_tokens = demark(example)
+    if not example_tokens:
+        # The example was non-blank (e.g. "!!!" or "// ↘") but demarks to no
+        # words at all, so it cannot be a subsequence of the transcript.
+        return "marked_up_example does not match the transcript"
     transcript_tokens = demark(transcript_text)
     n = len(example_tokens)
     m = len(transcript_tokens)
