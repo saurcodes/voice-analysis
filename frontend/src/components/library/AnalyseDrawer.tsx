@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { Warning } from "@phosphor-icons/react";
 import { useAuthState } from "@/auth/context";
 import { ApiError } from "@/api/client";
 import { useLlmModels, useMe } from "@/api/hooks";
@@ -27,6 +28,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { JobProgressList, type JobProgressItem } from "./JobProgressList";
 import { UploadDropzone } from "./UploadDropzone";
+
+const PROVIDER_UNAVAILABLE = "Coaching provider is unavailable right now";
 
 function rowKey(batch: number, file: File, index: number): string {
   return `${batch}-${file.name}-${file.lastModified}-${index}`;
@@ -57,11 +60,15 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
   const { getToken } = useAuthState();
   const queryClient = useQueryClient();
   const meQuery = useMe();
-  const llmModelsQuery = useLlmModels();
 
   const [files, setFiles] = useState<File[]>([]);
   const [speakerContext, setSpeakerContext] = useState("");
   const [llmEnabled, setLlmEnabled] = useState(false);
+  // The model list is only fetched once the user actually asks for coaching (drawer open, server
+  // has coaching on, switch on): listing calls the LLM server, which can be slow or down, and
+  // most uploads do not need it. A failure then disables the switch with an explanation.
+  const llmServerOn = meQuery.data?.llm_enabled === true;
+  const llmModelsQuery = useLlmModels({ enabled: open && llmServerOn && llmEnabled });
   // Tracks only an explicit user pick; the actual selected model (below) falls back to the
   // first available model so the Select preselects one as soon as the list arrives, without
   // an effect to sync it (this project's lint config flags setState calls made from effects).
@@ -74,6 +81,17 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
   const llmModels = llmModelsQuery.data?.models ?? [];
   const llmModel =
     llmModelOverride && llmModels.includes(llmModelOverride) ? llmModelOverride : (llmModels[0] ?? "");
+  // Scoped to the switch being on: the cached error outlives this drawer session (the drawer
+  // stays mounted), and resetForm turns the switch off on close, so the next open starts with
+  // an enabled switch whose toggle refetches the list instead of a permanently disabled one.
+  const providerUnavailable = llmEnabled && llmModelsQuery.isError;
+  const noModels = llmModelsQuery.isSuccess && llmModels.length === 0;
+  const modelsUnavailable = providerUnavailable || noModels;
+  // Coaching is only requested with a concrete model: never llm_enabled without llm_model.
+  const coachingRequested = llmEnabled && !llmDisabled && !modelsUnavailable && llmModel !== "";
+  // Switch on but the list has not arrived yet: hold the submit rather than silently uploading
+  // without coaching.
+  const modelsLoading = llmEnabled && !llmDisabled && !modelsUnavailable && llmModel === "";
 
   function resetForm() {
     setFiles([]);
@@ -96,7 +114,7 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
   }
 
   async function handleSubmit() {
-    if (files.length === 0 || submitting) return;
+    if (files.length === 0 || submitting || modelsLoading) return;
     setSubmitting(true);
     batchRef.current += 1;
     const batch = batchRef.current;
@@ -118,8 +136,8 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
           file,
           {
             speaker_context: speakerContext.trim() || undefined,
-            llm_enabled: llmEnabled && !llmDisabled,
-            llm_model: llmEnabled && !llmDisabled && llmModel ? llmModel : undefined,
+            llm_enabled: coachingRequested,
+            llm_model: coachingRequested ? llmModel : undefined,
           },
           {
             getToken,
@@ -224,17 +242,28 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
               <Label htmlFor="llm-switch">Coaching</Label>
               <Switch
                 id="llm-switch"
-                checked={llmEnabled}
+                checked={llmEnabled && !modelsUnavailable}
                 onCheckedChange={setLlmEnabled}
-                disabled={llmDisabled || submitting}
+                disabled={llmDisabled || modelsUnavailable || submitting}
               />
             </div>
             {llmDisabled ? (
               <p className="text-sm text-muted-foreground">Coaching is not enabled on this server yet</p>
+            ) : providerUnavailable ? (
+              <p className="flex items-center gap-1.5 text-sm text-warning">
+                <Warning weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+                {PROVIDER_UNAVAILABLE}
+              </p>
+            ) : noModels ? (
+              <p className="text-sm text-muted-foreground">No models available</p>
             ) : (
               llmEnabled && (
-                <Select value={llmModel} onValueChange={setLlmModelOverride}>
-                  <SelectTrigger className="w-full">
+                <Select
+                  value={llmModel}
+                  onValueChange={setLlmModelOverride}
+                  disabled={submitting || llmModels.length === 0}
+                >
+                  <SelectTrigger className="w-full" aria-label="Model">
                     <SelectValue placeholder="Choose a model" />
                   </SelectTrigger>
                   <SelectContent>
@@ -263,7 +292,11 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
               Uploads in progress
             </p>
           )}
-          <Button type="button" onClick={() => void handleSubmit()} disabled={files.length === 0 || submitting}>
+          <Button
+            type="button"
+            onClick={() => void handleSubmit()}
+            disabled={files.length === 0 || submitting || modelsLoading}
+          >
             {submitLabel}
           </Button>
         </SheetFooter>

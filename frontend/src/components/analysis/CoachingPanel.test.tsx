@@ -84,7 +84,8 @@ test("renders every coaching list, the marked-up example, and the Checks warning
 
   const example = screen.getByText(/quarterly RESULTS today/);
   expect(example.tagName).toBe("PRE");
-  expect(example).toHaveClass("num");
+  // Prose, not a number: the tabular-numerals .num utility does not apply.
+  expect(example).not.toHaveClass("num");
 
   expect(screen.getByText("Checks")).toBeInTheDocument();
   expect(
@@ -152,7 +153,7 @@ test("a disallowed model (422) shows an inline alert and keeps the dialog open",
   expect(screen.getByRole("heading", { name: "Re-run coaching" })).toBeInTheDocument();
 });
 
-test("the Model select shows 'No models available' and keeps Run disabled when the list is empty", async () => {
+test("the Model select reads 'No models available', is disabled, and keeps Run disabled when the list is empty", async () => {
   server.use(
     http.get("/api/me", () =>
       HttpResponse.json({
@@ -174,12 +175,75 @@ test("the Model select shows 'No models available' and keeps Run disabled when t
 
   await waitFor(() => expect(screen.getByRole("button", { name: "Re-run coaching" })).toBeEnabled());
   await user.click(screen.getByRole("button", { name: "Re-run coaching" }));
-  await user.click(screen.getByLabelText("Model"));
 
-  expect(await screen.findByText("No models available")).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("No models available"));
+  expect(screen.getByLabelText("Model")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+});
 
-  // Closing the dropdown first: Radix marks the rest of the page aria-hidden while the
-  // listbox is open, which would otherwise hide the dialog's own Run button from this query.
+async function openDialogWithModels(user: ReturnType<typeof userEvent.setup>) {
+  await waitFor(() => expect(screen.getByRole("button", { name: "Re-run coaching" })).toBeEnabled());
+  await user.click(screen.getByRole("button", { name: "Re-run coaching" }));
+  await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("qwen3:8b"));
+}
+
+test("while a re-run is pending the dialog shows Running..., disables Cancel and ignores Escape", async () => {
+  server.use(...llmEnabledHandlers());
+  server.use(http.post("/api/analyses/:id/coach", () => new Promise<never>(() => {})));
+
+  const user = userEvent.setup();
+  renderPanel();
+  await openDialogWithModels(user);
+  await user.click(screen.getByRole("button", { name: "Run" }));
+
+  expect(await screen.findByRole("button", { name: "Running..." })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Model" })).toBeDisabled();
+
   await user.keyboard("{Escape}");
-  expect(await screen.findByRole("button", { name: "Run" })).toBeDisabled();
+  expect(screen.getByRole("heading", { name: "Re-run coaching" })).toBeInTheDocument();
+});
+
+test("a 503 from the re-run keeps the dialog open with the error alert visible", async () => {
+  server.use(...llmEnabledHandlers());
+  server.use(
+    http.post("/api/analyses/:id/coach", () =>
+      HttpResponse.json({ detail: "coaching is not enabled on this server" }, { status: 503 }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderPanel();
+  await openDialogWithModels(user);
+  await user.click(screen.getByRole("button", { name: "Run" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("coaching is not enabled on this server");
+  expect(screen.getByRole("heading", { name: "Re-run coaching" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  // Still there after the mutation has settled and the dialog re-rendered.
+  await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+});
+
+test("the re-run dialog shows the provider-unavailable text and keeps Run disabled when /llm/models is 503", async () => {
+  server.use(...llmEnabledHandlers());
+  let modelCalls = 0;
+  server.use(
+    http.get("/api/llm/models", () => {
+      modelCalls += 1;
+      return HttpResponse.json({ detail: "LLM provider unavailable: connection refused" }, { status: 503 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderPanel();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Re-run coaching" })).toBeEnabled());
+  expect(modelCalls).toBe(0); // not fetched until the dialog opens
+  await user.click(screen.getByRole("button", { name: "Re-run coaching" }));
+
+  expect(await screen.findByText("Coaching provider is unavailable right now")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Model" })).toBeDisabled();
+  expect(modelCalls).toBe(1); // a server answer is not retried
 });

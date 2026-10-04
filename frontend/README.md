@@ -66,8 +66,10 @@ Single-series charts use the `primary` accent instead of the chart palette.
 ## Coaching
 
 The Coaching tab's "Re-run coaching" button only enables once `GET /api/me` reports
-`llm_enabled: true`, which the server only sets when it has `llm.enabled` configured and a
-reachable provider; the re-run dialog's model list comes from `GET /api/llm/models`. Any
+`llm_enabled: true`, which mirrors the server's `llm.enabled` setting only; it says nothing about
+whether the provider is reachable. Model availability comes from `GET /api/llm/models`, which
+feeds the re-run dialog's model list and the upload drawer's LLM switch. When that call fails
+(503), both show "Coaching provider is unavailable right now" and keep coaching disabled. Any
 number or markup mismatch the backend's post-checks catch is shown under a "Checks" heading
 on the coaching output itself, not just in the dialog.
 

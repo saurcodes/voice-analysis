@@ -1,10 +1,11 @@
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { ThemeProvider } from "@/lib/theme";
 import { AuthProvider } from "@/auth/AuthProvider";
 import { RequireAuth } from "@/auth/RequireAuth";
 import { AppShell } from "@/components/AppShell";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LibraryPage } from "@/pages/LibraryPage";
 import { LoginPage } from "@/pages/LoginPage";
@@ -44,52 +45,76 @@ function LazyPage({ children }: { children: ReactNode }) {
   return <Suspense fallback={<PageSkeleton />}>{children}</Suspense>;
 }
 
+const POINTER_LOCK_CHECK_MS = 2000;
+
+/** Dev-only watchdog: Radix sets body pointer-events: none while a modal layer is open and
+ * clears it on close. If a component crashes mid-close the style can stick, leaving a page
+ * that ignores every click with no visible cause; this makes that state loud in the console. */
+function usePointerLockWatchdog() {
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const timer = window.setInterval(() => {
+      if (document.body.style.pointerEvents !== "none") return;
+      const openLayer = document.querySelector(
+        '[role="dialog"][data-state="open"], [data-radix-popper-content-wrapper]',
+      );
+      if (openLayer === null) {
+        console.warn("[pointer-lock] body has pointer-events: none but no dialog or popper is open");
+      }
+    }, POINTER_LOCK_CHECK_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+}
+
 function App() {
+  usePointerLockWatchdog();
   return (
     <BrowserRouter>
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
           <AuthProvider>
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route
-                path="/settings"
-                element={
-                  <RequireAuth>
-                    <SettingsPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/"
-                element={
-                  <RequireAuth>
-                    <LibraryPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/analyses/:id"
-                element={
-                  <RequireAuth>
-                    <LazyPage>
-                      <AnalysisPage />
-                    </LazyPage>
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/compare"
-                element={
-                  <RequireAuth>
-                    <LazyPage>
-                      <ComparePage />
-                    </LazyPage>
-                  </RequireAuth>
-                }
-              />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+            <ErrorBoundary>
+              <Routes>
+                <Route path="/login" element={<LoginPage />} />
+                <Route
+                  path="/settings"
+                  element={
+                    <RequireAuth>
+                      <SettingsPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/"
+                  element={
+                    <RequireAuth>
+                      <LibraryPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/analyses/:id"
+                  element={
+                    <RequireAuth>
+                      <LazyPage>
+                        <AnalysisPage />
+                      </LazyPage>
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/compare"
+                  element={
+                    <RequireAuth>
+                      <LazyPage>
+                        <ComparePage />
+                      </LazyPage>
+                    </RequireAuth>
+                  }
+                />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </ErrorBoundary>
           </AuthProvider>
         </ThemeProvider>
       </QueryClientProvider>

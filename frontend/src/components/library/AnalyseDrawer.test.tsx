@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { renderWithProviders } from "@/test/render";
 import { ApiError } from "@/api/client";
 import { server } from "@/test/msw";
@@ -155,4 +156,68 @@ test("the submit button is disabled until a file is added", () => {
   renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
 
   expect(screen.getByRole("button", { name: "Analyse 0 files" })).toBeDisabled();
+});
+
+test("when /llm/models is 503 the Coaching switch is disabled with the provider-unavailable text and uploads go without coaching", async () => {
+  server.use(...llmEnabledHandlers());
+  let modelCalls = 0;
+  server.use(
+    http.get("/api/llm/models", () => {
+      modelCalls += 1;
+      return HttpResponse.json({ detail: "LLM provider unavailable: connection refused" }, { status: 503 });
+    }),
+  );
+  uploadAnalysisMock.mockResolvedValue({ job_ids: ["job-ok-1"] });
+
+  const user = userEvent.setup();
+  renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
+
+  const coachingSwitch = await screen.findByRole("switch", { name: "Coaching" });
+  await waitFor(() => expect(coachingSwitch).toBeEnabled());
+  expect(modelCalls).toBe(0); // the list is only fetched once coaching is switched on
+  await user.click(coachingSwitch);
+
+  expect(await screen.findByText("Coaching provider is unavailable right now")).toBeInTheDocument();
+  expect(screen.getByRole("switch", { name: "Coaching" })).toBeDisabled();
+  expect(screen.getByRole("switch", { name: "Coaching" })).not.toBeChecked();
+  expect(modelCalls).toBe(1);
+
+  const dropzone = screen.getByRole("button", { name: /drag and drop recordings/i });
+  fireEvent.drop(dropzone, { dataTransfer: { files: [makeFile("pitch.wav")] } });
+  await user.click(screen.getByRole("button", { name: "Analyse 1 file" }));
+
+  await waitFor(() => expect(uploadAnalysisMock).toHaveBeenCalledTimes(1));
+  const [, fields] = uploadAnalysisMock.mock.calls[0];
+  expect(fields).toMatchObject({ llm_enabled: false, llm_model: undefined });
+});
+
+test("after a provider 503, closing and reopening the drawer lets coaching be switched on again and refetches the models", async () => {
+  server.use(...llmEnabledHandlers());
+  server.use(
+    http.get("/api/llm/models", () =>
+      HttpResponse.json({ detail: "LLM provider unavailable: connection refused" }, { status: 503 }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  const onOpenChange = vi.fn();
+  const { rerender } = renderWithProviders(<AnalyseDrawer open onOpenChange={onOpenChange} />);
+
+  const coachingSwitch = await screen.findByRole("switch", { name: "Coaching" });
+  await waitFor(() => expect(coachingSwitch).toBeEnabled());
+  await user.click(coachingSwitch);
+  expect(await screen.findByText("Coaching provider is unavailable right now")).toBeInTheDocument();
+
+  await user.keyboard("{Escape}");
+  expect(onOpenChange).toHaveBeenLastCalledWith(false);
+  rerender(<AnalyseDrawer open={false} onOpenChange={onOpenChange} />);
+
+  server.use(...llmEnabledHandlers());
+  rerender(<AnalyseDrawer open onOpenChange={onOpenChange} />);
+
+  const reopenedSwitch = await screen.findByRole("switch", { name: "Coaching" });
+  expect(reopenedSwitch).toBeEnabled();
+  await user.click(reopenedSwitch);
+  await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent("qwen3:8b"));
+  expect(screen.queryByText("Coaching provider is unavailable right now")).not.toBeInTheDocument();
 });

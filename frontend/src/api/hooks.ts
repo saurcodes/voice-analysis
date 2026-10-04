@@ -8,7 +8,7 @@ import {
   type QueryKey,
 } from "@tanstack/react-query";
 import { useAuthState } from "@/auth/context";
-import { createApi } from "./client";
+import { ApiError, createApi } from "./client";
 import type { components } from "./types";
 
 type CoachRequest = components["schemas"]["CoachRequest"];
@@ -59,11 +59,23 @@ export function usePublicConfig() {
   });
 }
 
-export function useLlmModels() {
+const LLM_MODELS_STALE_MS = 5 * 60_000;
+
+/**
+ * The provider's model list. Listing hits the LLM server (it can be slow or down), so callers
+ * only enable this when they are about to show a model picker; the result stays fresh for five
+ * minutes and is not refetched on window focus. A server answer (ApiError, e.g. a 503 when the
+ * provider is unreachable) is final; only a network-level failure is retried, once.
+ */
+export function useLlmModels({ enabled = true }: { enabled?: boolean } = {}) {
   const api = useApi();
   return useQuery({
     queryKey: ["vc", "llmModels"] as const,
     queryFn: () => api.get<LlmModels>("/api/llm/models"),
+    enabled,
+    staleTime: LLM_MODELS_STALE_MS,
+    refetchOnWindowFocus: false,
+    retry: (failureCount, error) => !(error instanceof ApiError) && failureCount < 1,
   });
 }
 

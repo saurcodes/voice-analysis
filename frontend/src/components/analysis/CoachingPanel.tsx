@@ -30,6 +30,8 @@ function stringList(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string");
 }
 
+const PROVIDER_UNAVAILABLE = "Coaching provider is unavailable right now";
+
 function coachErrorMessage(error: unknown): string {
   if (error instanceof ApiError && typeof error.detail === "string") return error.detail;
   return "Something went wrong";
@@ -43,8 +45,8 @@ function Checks({ warnings }: { warnings: string[] }) {
     <section>
       <h3 className="text-sm font-medium">Checks</h3>
       <ul className="mt-2 flex flex-col gap-1.5">
-        {warnings.map((warning) => (
-          <li key={warning} className="flex items-start gap-1.5 text-sm text-warning">
+        {warnings.map((warning, index) => (
+          <li key={`${index}-${warning}`} className="flex items-start gap-1.5 text-sm text-warning">
             <Warning weight="regular" className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{warning}</span>
           </li>
@@ -65,23 +67,34 @@ function RerunCoachingDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const llmModelsQuery = useLlmModels();
+  const llmModelsQuery = useLlmModels({ enabled: open });
   const coachMutation = useCoachAnalysis();
   // CoachingPanel remounts this component (via `key`) every time the dialog opens, so a
   // lazy initial value here is all "prefilled on open" needs: no effect required to reset it
   // on reopen.
   const [draftContext, setDraftContext] = useState(() => speakerContext ?? "");
-  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const models = llmModelsQuery.data?.models ?? [];
+  const providerUnavailable = llmModelsQuery.isError;
+  const noModels = llmModelsQuery.isSuccess && models.length === 0;
+  const pending = coachMutation.isPending;
+  // Read from the mutation's own state rather than a per-call onError callback, so the alert
+  // stays up after a failure until the next Run (mutate resets it) or the dialog remounts.
+  const submitError = coachMutation.isError ? coachErrorMessage(coachMutation.error) : null;
   // Tracks only an explicit user pick; the model actually in effect (below) falls back to
   // the first available one, so the Select preselects it as soon as the list arrives without
   // needing an effect to sync state from the query.
   const [modelOverride, setModelOverride] = useState<string | null>(null);
   const selectedModel = modelOverride && models.includes(modelOverride) ? modelOverride : (models[0] ?? "");
 
+  function handleOpenChange(next: boolean) {
+    // A running request cannot be cancelled server-side: Escape, an overlay click and the close
+    // button are all ignored until it settles, so its result (or error) is never lost.
+    if (!next && pending) return;
+    onOpenChange(next);
+  }
+
   function handleRun() {
-    setSubmitError(null);
     const trimmed = draftContext.trim();
     coachMutation.mutate(
       {
@@ -91,16 +104,13 @@ function RerunCoachingDialog({
           model: selectedModel || null,
         },
       },
-      {
-        onSuccess: () => onOpenChange(false),
-        onError: (error) => setSubmitError(coachErrorMessage(error)),
-      },
+      { onSuccess: () => onOpenChange(false) },
     );
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent closeDisabled={pending}>
         <DialogHeader>
           <DialogTitle>Re-run coaching</DialogTitle>
           <DialogDescription>Generate fresh coaching for this analysis.</DialogDescription>
@@ -111,7 +121,7 @@ function RerunCoachingDialog({
             id="coach-speaker-context"
             value={draftContext}
             onChange={(event) => setDraftContext(event.target.value)}
-            disabled={coachMutation.isPending}
+            disabled={pending}
           />
         </div>
         <div className="flex flex-col gap-2">
@@ -119,10 +129,10 @@ function RerunCoachingDialog({
           <Select
             value={selectedModel}
             onValueChange={setModelOverride}
-            disabled={coachMutation.isPending}
+            disabled={pending || models.length === 0}
           >
             <SelectTrigger id="coach-model" className="w-full">
-              <SelectValue placeholder="Choose a model" />
+              <SelectValue placeholder={noModels ? "No models available" : "Choose a model"} />
             </SelectTrigger>
             <SelectContent>
               {models.length > 0 ? (
@@ -138,6 +148,12 @@ function RerunCoachingDialog({
               )}
             </SelectContent>
           </Select>
+          {providerUnavailable && (
+            <p className="flex items-center gap-1.5 text-sm text-warning">
+              <Warning weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+              {PROVIDER_UNAVAILABLE}
+            </p>
+          )}
         </div>
         {submitError && (
           <p role="alert" className="flex items-center gap-1.5 text-sm text-serious">
@@ -146,15 +162,11 @@ function RerunCoachingDialog({
           </p>
         )}
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
             Cancel
           </Button>
-          <Button
-            type="button"
-            onClick={handleRun}
-            disabled={coachMutation.isPending || models.length === 0}
-          >
-            {coachMutation.isPending ? "Running..." : "Run"}
+          <Button type="button" onClick={handleRun} disabled={pending || models.length === 0}>
+            {pending ? "Running..." : "Run"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -216,8 +228,8 @@ export function CoachingPanel({
           <p className="text-sm text-muted-foreground">Coaching is not available yet.</p>
           {warnings.length > 0 && (
             <ul className="mt-2 flex flex-col gap-1 text-xs text-muted-foreground">
-              {warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
+              {warnings.map((warning, index) => (
+                <li key={`${index}-${warning}`}>{warning}</li>
               ))}
             </ul>
           )}
@@ -267,7 +279,7 @@ export function CoachingPanel({
       {markedUpExample && (
         <section>
           <h3 className="text-sm font-medium">Marked-up example</h3>
-          <pre className="num mt-2 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 text-sm">
+          <pre className="mt-2 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 text-sm">
             {markedUpExample}
           </pre>
         </section>
