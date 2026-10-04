@@ -38,8 +38,11 @@ def get_job(job_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), se
 
 
 @router.get("/jobs/{job_id}/events")
-def job_event_stream(job_id: uuid.UUID, request: Request, user: CurrentUser = Depends(get_current_user),
-                     session: Session = Depends(get_session)):
-    if repo.get_job(session, user.id, job_id) is None:
+def job_event_stream(job_id: uuid.UUID, request: Request, user: CurrentUser = Depends(get_current_user)):
+    # No request-scoped session here: a dependency session would stay checked out for the whole
+    # stream. The ownership check uses a short session; the generator opens one per poll.
+    with request.app.state.session_factory() as s:
+        exists = repo.get_job(s, user.id, job_id) is not None
+    if not exists:
         raise HTTPException(404, "job not found")
     return EventSourceResponse(job_events(request.app.state.session_factory, user.id, job_id))

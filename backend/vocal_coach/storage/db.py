@@ -9,6 +9,8 @@ from sqlalchemy.pool import StaticPool
 
 from vocal_coach.storage.models import Base
 
+POOL_SIZE = 10  # SSE pollers and request handlers share this; each worker process has its own engine
+
 
 def _json_dumps(value) -> str:
     """Reject NaN/Infinity on every backend (Postgres JSONB already does; SQLite would store them)."""
@@ -29,7 +31,7 @@ def make_engine(url: str) -> Engine:
             dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
         return engine
-    return create_engine(url, pool_pre_ping=True, json_serializer=_json_dumps)
+    return create_engine(url, pool_size=POOL_SIZE, pool_pre_ping=True, json_serializer=_json_dumps)
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:
