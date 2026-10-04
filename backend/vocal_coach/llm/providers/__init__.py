@@ -1,5 +1,7 @@
 """Importing this package registers every built-in LLM provider.
 
-Empty for now; Tasks 4-5 add the openai_compatible and anthropic provider
-modules and import them here so the side-effecting @register decorators run.
+Task 5 adds the anthropic provider module and imports it here alongside
+openai_compatible so the side-effecting @register decorators run.
 """
+from . import openai_compatible  # noqa: F401
+
