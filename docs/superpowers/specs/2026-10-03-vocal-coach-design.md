@@ -369,14 +369,16 @@ Clarity metrics:
 ```
 users             id uuid pk, keycloak_sub text unique, email text, username text, created_at
 drive_connections user_id uuid pk fk, encrypted_refresh_token bytea, google_email text, connected_at
-analyses          id uuid pk, user_id fk, file_name, drive_file_id null, content_sha256,
+analyses          id uuid pk, user_id fk, file_name, drive_file_id null, content_sha256 (extracted-WAV hash),
+                  source_sha256 null (uploaded-bytes hash; names the stored upload),
                   recorded_at (Drive modifiedTime or upload time), analysed_at,
                   analyser_version, config_hash, metrics_json jsonb, transcript_json jsonb null,
                   speaker_context text null, coaching_json jsonb null, coaching_warnings jsonb null
                   unique (user_id, content_sha256, config_hash, analyser_version)
                   index (user_id, recorded_at)
 jobs              id uuid pk, user_id fk, status (queued|running|done|failed), stage text,
-                  progress_pct int, error text null, analysis_id fk null, created_at, updated_at
+                  progress_pct int, error text null, analysis_id fk null, created_at, updated_at,
+                  file_name null, source_sha256 null, recorded_at null (kept for retry)
 ```
 
 Re-analysing the same file with the same config and analyser version for the same user returns the stored analysis (a new analyser version yields a new row; the old one is kept) (job completes immediately, coaching re-run only if context or model changed).
@@ -413,7 +415,11 @@ Per metric: `{path, values[], delta, arrow (↑ ↓ →), verdict (improved | wo
 ## 10. Jobs and progress
 
 - `jobs/runner.py`: `ThreadPoolExecutor(max_workers=JOB_WORKERS, default 2)`. `POST /api/analyses` inserts `queued` job, submits `pipeline.run(job_id)`. Pipeline callback writes `stage`, `progress_pct` to the job row at each transition: `download → extract → analyse → transcribe → coach → done`.
-- `GET /api/jobs/{id}/events`: SSE. Polls the job row every 500 ms, emits `stage`, `progress`, `done {analysis_id}`, `error {message}`; closes on done/failed. Client falls back to `GET /api/jobs/{id}` polling if SSE drops.
+- `GET /api/jobs/{id}/events`: SSE. Polls the job row every 500 ms, emits `stage`, `progress`, `done {analysis_id}`, `error {message}`; closes on done/failed. Client falls back to `GET /api/jobs/{id}` polling if SSE drops. A stream open longer than an hour ends with `timeout {message}` (not an error: the job may still be running; the client switches to polling). Each poll uses its own short session off the event loop; an open stream holds no database connection.
+- `GET /api/jobs?status=&limit=`: the user's jobs, newest first (`status` one of `queued|running|done|failed`), each with `file_name` and `created_at`.
+- `POST /api/jobs/{id}/retry`: re-runs a finished job's upload as a new job → 202 `{job_id}`; 404 foreign/missing, 409 not finished, 410 the upload is no longer stored.
+- Uploads are stored once per user as `DATA_DIR/uploads/<user_id>/<source_sha256>.<ext>`; jobs and analyses record `source_sha256` (the uploaded bytes' hash), distinct from `content_sha256` (the extracted WAV's hash, the dedupe key).
+- A worker process that dies marks its job `failed` (`worker crashed: …`) and the pool is rebuilt; if it cannot be rebuilt the upload answers 503 and the job is `failed / job runner unavailable`.
 - On backend startup, jobs in `queued|running` are marked `failed` with error `"server restarted"`.
 - One job per file; multi-select creates N jobs.
 
@@ -484,11 +490,14 @@ Extract numeric tokens from the four output fields (ignoring `//`). Allowed set 
 | DELETE | `/drive/connect` | unlink |
 | GET | `/drive/files?folder_id=` | list audio/video files |
 | POST | `/analyses` | JSON `{source:"drive", file_ids[], speaker_context, llm:{enabled, model}}` or multipart upload with same fields → `{job_ids[]}` |
+| GET | `/jobs?status=&limit=` | the user's jobs, newest first, with `file_name`, `created_at` |
 | GET | `/jobs/{id}` | status |
-| GET | `/jobs/{id}/events` | SSE |
+| POST | `/jobs/{id}/retry` | re-run a finished job's upload → 202 `{job_id}`; 409 if not finished, 410 if the upload is gone |
+| GET | `/jobs/{id}/events` | SSE (`stage`, `progress`, `done`, `error`, `timeout`) |
 | GET | `/analyses` | list (id, file_name, recorded_at, key summary metrics, has_coaching); returns summaries (no blobs), paginated |
 | GET | `/analyses/{id}` | full record |
-| DELETE | `/analyses/{id}` | delete analysis and cached files |
+| GET | `/analyses/{id}/raw/{kind}` | download `metrics` / `transcript` / `coaching` JSON as an attachment; 404 when absent |
+| DELETE | `/analyses/{id}` | delete analysis and its upload once nothing else references it |
 | POST | `/analyses/{id}/coach` | re-run LLM with new `{speaker_context, model}` |
 | GET | `/comparisons?ids=a,b,c` | deltas table + trend series |
 | GET | `/llm/models` | `{provider, models[]}` or `{enabled:false}` |
@@ -529,6 +538,8 @@ Dev mode: compose up `postgres keycloak` only; `uvicorn --reload` and `vite dev`
 - faster-whisper failure → `transcript_json = null`; clarity and filler metrics absent; coaching runs on metrics alone.
 - LLM failure → §11.3.
 - Job crash → `failed` with error; SSE `error` event; row visible in Library with retry.
+- Upload cleanup: an upload is deleted when no analysis and no unfinished job references its `source_sha256` — when its last analysis is deleted, and after a pipeline failure (a file that cannot be decoded fails the same way every time). Uploads of jobs failed by the infrastructure (worker crash, restart, runner unavailable) are kept so `POST /jobs/{id}/retry` can re-run them.
+- Decode failure → job error `could not decode <file name>: not a supported audio/video file`; the ffmpeg command and stderr go to the server log only.
 
 ## 16. Testing
 

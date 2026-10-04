@@ -82,9 +82,18 @@ Comparison (`vocal_coach/storage/comparison.py`) follows `config.yaml → compar
 
 ```bash
 cp .env.example .env               # edit if needed
-docker compose up -d --build       # postgres + keycloak (realm imported, user demo/demo) + backend
+docker compose up -d --build       # postgres + keycloak (dev realm imported, user demo/demo) + backend
 ./scripts/smoke.sh path/to/recording.wav   # token → /api/me → upload → SSE progress
 ```
+
+The backend image is a multi-stage build: there is no aarch64 wheel for praat-parselmouth, so on arm64 (Apple
+silicon) the builder stage compiles it. A cold build takes about 2.5 minutes; later builds reuse the layer cache.
+The first job downloads the whisper model (~460 MB) into the `models` volume.
+
+**Realm files.** `keycloak/realm-export.dev.json` (default; `KEYCLOAK_REALM_FILE` in `.env`) has the `demo`/`demo` user,
+the password grant and self-registration — `scripts/smoke.sh` needs it. `keycloak/realm-export.json` is
+production-shaped: no users, no password grant, no self-registration; same client, PKCE, audience mapper and `user`
+role. Keycloak imports the realm only when it does not exist yet, so switching files needs a fresh Keycloak database.
 
 Dev loop: `docker compose up -d postgres keycloak`, then from `backend/`:
 `DATABASE_URL=postgresql+psycopg://vocal:vocal@localhost:5432/vocal_coach uvicorn "vocal_coach.main:create_app" --factory --reload`.
@@ -92,8 +101,11 @@ Migrations run once in the container entrypoint; with `--reload` locally run `al
 
 Auth: Bearer tokens from Keycloak realm `vocal-coach`, client `vocal-coach-web` (public, PKCE). The realm export adds an
 audience mapper so access tokens carry `aud: vocal-coach-web`; without it Keycloak only emits `aud: account` and the API
-answers 401. `directAccessGrantsEnabled` is on only so `scripts/smoke.sh` can use the password grant — turn it off
-outside local development.
+answers 401. `directAccessGrantsEnabled` is on only in the dev realm, so `scripts/smoke.sh` can use the password grant.
+
+Upload: `POST /api/analyses` multipart with `file` (required), `speaker_context`, `llm_enabled`, `llm_model`, and
+`recorded_at` (ISO-8601 with a timezone offset, e.g. `2026-09-30T08:15:00+02:00`; defaults to the upload time; a naive or
+unparsable value is 422). The stored file name drops any client-side directories.
 
 Jobs run in a spawn-based process pool (`JOB_WORKERS`, default 1): praat-parselmouth and CTranslate2 are not safe to share
 across threads, and each worker loads the whisper model once. Progress is written to the `jobs` row and streamed by
@@ -101,4 +113,28 @@ across threads, and each worker loads the whisper model once. Progress is writte
 process per database (the restart sweep is not multi-process safe).
 
 Endpoints: see `/docs`. Drive (`/api/drive/*`, `source: "drive"`) and coaching (`/api/analyses/{id}/coach`,
-`/api/llm/models`) are stubs until Plans 6–7.
+`/api/llm/models`) are stubs until Plans 6–7; `/api/me` reports `llm_enabled: false` until then.
+
+Jobs: `GET /api/jobs?status=` lists jobs newest first; `POST /api/jobs/{id}/retry` re-runs a finished job's upload (410
+once the upload has been cleaned up). A worker process that dies (OOM kill, segfault) fails its job with
+`worker crashed: …` and the pool is rebuilt; if that fails the upload answers 503. Uploads live in
+`DATA_DIR/uploads/<user>/<source_sha256>.<ext>` and are deleted once no analysis and no unfinished job references them
+(after the last analysis is deleted, or after a pipeline failure).
+
+### Notes for Plan 5 (frontend)
+
+- SSE needs a fetch-based client (e.g. `@microsoft/fetch-event-source`): native `EventSource` cannot send an
+  `Authorization` header. Access tokens expire after 300 s, so a reconnect must use a fresh token.
+- Not every stage event is guaranteed: a fast job can move through several stages between two 500 ms polls, so
+  the client sees only the latest. A dedupe hit goes `download → extract → done`. Treat `done`, `error` and `timeout`
+  as terminal; after `timeout`, poll `GET /api/jobs/{id}`.
+- Error bodies are `{"detail": str}`, except FastAPI's 422 validation errors, where `detail` is a list of objects.
+- The OpenAPI schema types the analysis detail (`MetricsReport`, `Transcript`), `/config/public` (`PublicConfig`),
+  `/llm/models` (`LlmModels`), job status/stage enums, and the multipart upload body.
+
+### Known gaps
+
+- On a dedupe hit the pipeline returns the existing analysis before the coach stage (it only updates
+  `speaker_context`). Plan 6 should run coaching against the existing row when `llm_enabled` is set.
+- Retry re-uses `file_name`, the upload and `recorded_at`, but not `speaker_context` or the LLM options.
+- Multipart uploads are buffered to a spooled temp file by Starlette before the size backstop runs (Plan 8).
