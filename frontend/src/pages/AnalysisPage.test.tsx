@@ -1,0 +1,145 @@
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
+import { Route, Routes } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { server } from "@/test/msw";
+import { renderWithProviders } from "@/test/render";
+import { analysisDetail } from "@/test/fixtures";
+import { AnalysisPage } from "./AnalysisPage";
+
+const ANALYSIS_ID = "c3c3c3c3-0000-4000-8000-000000000001";
+
+function renderPage(route = `/analyses/${ANALYSIS_ID}`) {
+  return renderWithProviders(
+    <Routes>
+      <Route path="/analyses/:id" element={<AnalysisPage />} />
+    </Routes>,
+    { route },
+  );
+}
+
+function cardFor(label: string): HTMLElement {
+  const labelEl = screen.getByText(label);
+  const card = labelEl.closest('[data-slot="card"]');
+  if (!card) throw new Error(`No card found for label "${label}"`);
+  return card as HTMLElement;
+}
+
+beforeEach(() => {
+  // jsdom has no object-URL implementation; RawPanel's download flow needs these to exist.
+  URL.createObjectURL = vi.fn(() => "blob:mock-url");
+  URL.revokeObjectURL = vi.fn();
+});
+
+describe("AnalysisPage", () => {
+  it("renders 8 summary cards with formatted values, with exactly one low-confidence badge", async () => {
+    const detail = analysisDetail("default", {
+      metrics: {
+        ...analysisDetail().metrics,
+        articulation: { ...analysisDetail().metrics.articulation, low_confidence: true },
+      },
+    });
+    server.use(http.get("/api/analyses/:id", () => HttpResponse.json(detail)));
+
+    renderPage();
+
+    expect(await screen.findByText("practice-run.wav")).toBeInTheDocument();
+
+    expect(within(cardFor("Median pitch")).getByText("165")).toHaveClass("num");
+    expect(within(cardFor("Pitch range")).getByText("10.8")).toHaveClass("num");
+    expect(within(cardFor("Flat endings")).getByText("20.0")).toHaveClass("num");
+    expect(within(cardFor("Pauses per minute")).getByText("12.0")).toHaveClass("num");
+    expect(within(cardFor("Articulation rate")).getByText("3.1")).toHaveClass("num");
+    expect(within(cardFor("Trailing off")).getByText("1")).toHaveClass("num");
+    expect(within(cardFor("Fillers per minute")).getByText("18.0")).toHaveClass("num");
+    expect(within(cardFor("Eaten words")).getByText("6.3")).toHaveClass("num");
+
+    expect(screen.getAllByText("low confidence")).toHaveLength(1);
+    expect(within(cardFor("Articulation rate")).getByText("low confidence")).toBeInTheDocument();
+  });
+
+  it("shows the quality banner, dashes for every card, and the timeline empty state for too_short", async () => {
+    server.use(
+      http.get("/api/analyses/:id", () => HttpResponse.json(analysisDetail("too_short"))),
+    );
+
+    renderPage();
+
+    expect(
+      await screen.findByText("Recording shorter than 2 seconds; no metrics computed."),
+    ).toBeInTheDocument();
+
+    // Nullable fields (pitch/intonation/pace blocks, and anything sourced from the
+    // transcript, which is null outright for too_short) render "-".
+    expect(within(cardFor("Median pitch")).getByText("-")).toBeInTheDocument();
+    expect(within(cardFor("Pitch range")).getByText("-")).toBeInTheDocument();
+    expect(within(cardFor("Flat endings")).getByText("-")).toBeInTheDocument();
+    expect(within(cardFor("Articulation rate")).getByText("-")).toBeInTheDocument();
+    expect(within(cardFor("Fillers per minute")).getByText("-")).toBeInTheDocument();
+    expect(within(cardFor("Eaten words")).getByText("-")).toBeInTheDocument();
+    // phrasing.pauses_per_min and energy.trailing_off_count are non-nullable counts that
+    // are genuinely 0 when no speech was detected, not "unavailable" - they render 0, not
+    // a dash, which is the honest answer rather than a forced placeholder.
+    expect(within(cardFor("Pauses per minute")).getByText("0.0")).toBeInTheDocument();
+    expect(within(cardFor("Trailing off")).getByText("0")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Timeline" }));
+    expect(await screen.findByText("Not enough voiced speech for a timeline.")).toBeInTheDocument();
+  });
+
+  it("switches tabs", async () => {
+    server.use(http.get("/api/analyses/:id", () => HttpResponse.json(analysisDetail("default"))));
+    renderPage();
+
+    await screen.findByText("practice-run.wav");
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("data-state", "active");
+
+    await userEvent.click(screen.getByRole("tab", { name: "Transcript" }));
+    expect(await screen.findByText("Filler word")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Transcript" })).toHaveAttribute("data-state", "active");
+  });
+
+  it("triggers a fetch to /raw/metrics when the Metrics download button is clicked", async () => {
+    server.use(http.get("/api/analyses/:id", () => HttpResponse.json(analysisDetail("default"))));
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    renderPage();
+    await screen.findByText("practice-run.wav");
+
+    await userEvent.click(screen.getByRole("tab", { name: "Raw" }));
+    const metricsRow = screen.getByText("Metrics").closest("div")?.parentElement as HTMLElement;
+    await userEvent.click(within(metricsRow).getByRole("button", { name: "Download" }));
+
+    await waitFor(() => {
+      const called = fetchSpy.mock.calls.some((call) => String(call[0]).includes("/raw/metrics"));
+      expect(called).toBe(true);
+    });
+
+    fetchSpy.mockRestore();
+  });
+
+  it("shows the coaching-unavailable state with warnings when coaching is null", async () => {
+    server.use(
+      http.get("/api/analyses/:id", () =>
+        HttpResponse.json(analysisDetail("default", { coaching_warnings: ["low confidence recording"] })),
+      ),
+    );
+    renderPage();
+    await screen.findByText("practice-run.wav");
+
+    await userEvent.click(screen.getByRole("tab", { name: "Coaching" }));
+    expect(await screen.findByText("Coaching is not available yet.")).toBeInTheDocument();
+    expect(screen.getByText("low confidence recording")).toBeInTheDocument();
+  });
+
+  it("shows a not-found state for a 404", async () => {
+    server.use(
+      http.get("/api/analyses/:id", () => HttpResponse.json({ detail: "not found" }, { status: 404 })),
+    );
+    renderPage();
+
+    expect(await screen.findByText("This analysis was not found.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Library" })).toBeInTheDocument();
+  });
+});
