@@ -105,3 +105,20 @@ def test_comparison_min_meaningful_change_pct_must_be_positive():
     from vocal_coach.config import ComparisonConfig
     with pytest.raises(ValueError):
         ComparisonConfig(min_meaningful_change_pct=0, directions={})
+
+
+def test_llm_config_loaded_and_not_in_hash(cfg):
+    assert cfg.llm.provider in {"openai_compatible", "anthropic"}
+    assert cfg.llm.timeout_s == 120
+    from vocal_coach.config import config_hash
+    changed = cfg.model_copy(update={"llm": cfg.llm.model_copy(update={"model": "other"})})
+    assert config_hash(changed) == config_hash(cfg)
+
+
+def test_llm_config_defaults_when_section_missing():
+    from vocal_coach.config import LLMConfig
+    defaults = LLMConfig()
+    assert defaults.enabled is False
+    assert defaults.provider == "openai_compatible"
+    assert defaults.timeout_s == 120.0
+    assert defaults.allowed_models == []

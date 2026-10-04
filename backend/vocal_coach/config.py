@@ -87,12 +87,26 @@ class ComparisonConfig(BaseModel):
     directions: dict[str, Direction]
 
 
+class LLMConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    provider: str = "openai_compatible"
+    base_url: str = "http://localhost:11434/v1"
+    model: str = ""
+    allowed_models: list[str] = []
+    seed: int = 42
+    timeout_s: float = 120.0
+    max_output_tokens: int = 2048
+
+
 class AppConfig(BaseModel):
     analysis: AnalysisConfig
     articulation: ArticulationConfig
     transcription: TranscriptionConfig
     clarity: ClarityConfig
     comparison: ComparisonConfig
+    llm: LLMConfig
     raw: dict[str, Any]
     """The full YAML document, for sections validated by later plans."""
 
@@ -107,6 +121,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         transcription=TranscriptionConfig(**raw["transcription"]),
         clarity=ClarityConfig(**raw["clarity"]),
         comparison=ComparisonConfig(**raw["comparison"]),
+        llm=LLMConfig(**raw["llm"]) if "llm" in raw else LLMConfig(),
         raw=raw,
     )
 

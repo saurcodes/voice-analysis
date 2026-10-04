@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     job_workers: int = 1
     max_upload_mb: int = 500
     require_ffmpeg: bool = True
+    openai_compat_api_key: str | None = None
+    anthropic_api_key: str | None = None
 
     @property
     def jwks_url(self) -> str:
