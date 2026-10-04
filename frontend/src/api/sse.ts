@@ -9,6 +9,8 @@
  * reaches a terminal status or the caller aborts.
  */
 
+import { ApiError } from "./client";
+
 export type JobEventName = "stage" | "progress" | "done" | "error" | "timeout";
 
 export interface JobEvent {
@@ -40,13 +42,16 @@ function isJobEventName(value: string): value is JobEventName {
  * Parses one blank-line-delimited SSE frame. A frame with no "event:" line is a plain
  * "message" event per the spec; this client has no use for those, so it's ignored rather
  * than passed to onEvent. "data:" may appear on multiple lines; those are joined with "\n"
- * before JSON-parsing, per the SSE spec.
+ * before JSON-parsing, per the SSE spec. Lines are expected to already have any trailing
+ * "\r" stripped (streamJobEvents normalises CRLF before splitting into frames); a per-line
+ * strip is kept here too as a harmless defensive fallback.
  */
 function handleFrame(frame: string, onEvent: (event: JobEvent) => void): TerminalEventName | undefined {
   let eventName: string | undefined;
   const dataLines: string[] = [];
 
-  for (const line of frame.split("\n")) {
+  for (const rawLine of frame.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     if (line.startsWith("event:")) {
       eventName = line.slice("event:".length).trim();
     } else if (line.startsWith("data:")) {
@@ -84,6 +89,13 @@ export interface StreamJobEventsOptions {
  * - "disconnected" for anything else (non-2xx response, no body, stream ended or threw
  *   without a terminal event) - callers fall back to polling rather than treating this as
  *   a real failure, since a dropped connection says nothing about the job itself.
+ *
+ * The backend (sse-starlette 3.x) terminates lines and frames with CRLF ("\r\n"), not the
+ * bare "\n" the SSE spec's examples use, so every "\r\n" in the accumulated buffer is
+ * normalised to "\n" before frame boundaries are found. This runs on the whole buffer after
+ * every chunk (not just the newly-appended bytes), so a terminator split across two chunks
+ * right between its "\r" and "\n" - a lone "\r" left dangling at the end of the buffer until
+ * the next chunk's leading "\n" arrives - still normalises correctly once both halves are in.
  */
 export async function streamJobEvents(
   jobId: string,
@@ -101,6 +113,7 @@ export async function streamJobEvents(
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n");
 
       let sepIndex = buffer.indexOf("\n\n");
       while (sepIndex !== -1) {
@@ -175,6 +188,9 @@ function mapEventToStatus(event: JobEvent): JobStatusLike {
  * fires for every SSE event and every poll result, each mapped to the same JobStatusLike
  * shape, so a caller can render one progress UI regardless of which transport produced it.
  */
+/** Give up polling (and report a terminal "failed" status) after this many bad polls in a row. */
+const MAX_CONSECUTIVE_POLL_FAILURES = 5;
+
 export function watchJob(
   jobId: string,
   deps: WatchJobDeps,
@@ -183,6 +199,7 @@ export function watchJob(
   const controller = new AbortController();
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let aborted = false;
+  let consecutiveFailures = 0;
 
   function schedulePoll() {
     if (aborted) return;
@@ -194,10 +211,25 @@ export function watchJob(
     try {
       const status = await deps.getJob(jobId);
       if (aborted) return;
+      consecutiveFailures = 0;
       onStatus(status);
       if (!isTerminalStatus(status)) schedulePoll();
-    } catch {
-      if (!aborted) schedulePoll();
+    } catch (error) {
+      if (aborted) return;
+      // The job itself is gone (deleted, or its upload expired): polling further can't
+      // recover, so stop and report it as failed rather than retrying forever.
+      if (error instanceof ApiError && (error.status === 404 || error.status === 410)) {
+        const detail = typeof error.detail === "string" ? error.detail : "Job not found";
+        onStatus({ status: "failed", error: detail });
+        return;
+      }
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+        const message = error instanceof Error ? error.message : "Job status unavailable";
+        onStatus({ status: "failed", error: message });
+        return;
+      }
+      schedulePoll();
     }
   }
 
@@ -205,7 +237,10 @@ export function watchJob(
     const result = await streamJobEvents(jobId, {
       authFetch: deps.authFetch,
       signal: controller.signal,
-      onEvent: (event) => onStatus(mapEventToStatus(event)),
+      onEvent: (event) => {
+        if (aborted) return;
+        onStatus(mapEventToStatus(event));
+      },
     });
     if (aborted || result === "aborted" || result === "done" || result === "error") return;
     // "timeout" or "disconnected": the stream gave up, not the job. Poll for the real status.

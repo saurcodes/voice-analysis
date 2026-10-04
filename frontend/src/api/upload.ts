@@ -64,7 +64,7 @@ export function uploadAnalysis(
 
         xhr.upload.onprogress = (event) => {
           if (!onProgress || !event.lengthComputable || event.total === 0) return;
-          onProgress(Math.round((event.loaded / event.total) * 100));
+          onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
         };
 
         xhr.onload = () => {

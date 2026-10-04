@@ -176,9 +176,11 @@ export const handlers = [
   ),
 
   http.get("/api/jobs/:id/events", () => {
+    // CRLF line/frame terminators, matching the real backend's sse-starlette 3.x output
+    // (its default separator is "\r\n", not the bare "\n" the SSE spec's examples use).
     const body =
-      'event: stage\ndata: {"stage":"analyse","progress_pct":50}\n\n' +
-      `event: done\ndata: {"analysis_id":"${analysisDetail().id}"}\n\n`;
+      'event: stage\r\ndata: {"stage":"analyse","progress_pct":50}\r\n\r\n' +
+      `event: done\r\ndata: {"analysis_id":"${analysisDetail().id}"}\r\n\r\n`;
     return new HttpResponse(body, { headers: { "content-type": "text/event-stream" } });
   }),
 
