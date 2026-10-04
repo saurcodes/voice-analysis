@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import type { components } from "@/api/types";
 import { chartSlots } from "@/lib/compare";
-import { formatMetricValue, METRIC_LABELS, type MetricLabel } from "@/lib/metrics";
+import { formatAxisTick, formatMetricValue, METRIC_LABELS, type MetricLabel } from "@/lib/metrics";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PathPicker } from "./PathPicker";
@@ -250,7 +250,14 @@ export function TrendCharts({
                       tick={AXIS_TICK}
                       tickLine={false}
                     />
-                    <YAxis width={44} tickCount={4} stroke="var(--border)" tick={AXIS_TICK} tickLine={false} />
+                    <YAxis
+                      width={56}
+                      tickCount={4}
+                      tickFormatter={formatAxisTick}
+                      stroke="var(--border)"
+                      tick={AXIS_TICK}
+                      tickLine={false}
+                    />
                     <Tooltip content={makeTrendTooltip(label)} cursor={{ stroke: "var(--border)" }} />
                     <Line
                       type="monotone"

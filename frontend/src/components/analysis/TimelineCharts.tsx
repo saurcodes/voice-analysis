@@ -10,7 +10,7 @@ import {
   type TooltipContentProps,
 } from "recharts";
 import type { components } from "@/api/types";
-import { fmt, formatClockTime, isTimelineEmpty } from "@/lib/metrics";
+import { fmt, formatAxisTick, formatClockTime, isTimelineEmpty } from "@/lib/metrics";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -132,7 +132,14 @@ export function TimelineCharts({ metrics }: { metrics: MetricsReport }) {
                     tick={AXIS_TICK}
                     tickLine={false}
                   />
-                  <YAxis width={40} tickCount={4} stroke="var(--border)" tick={AXIS_TICK} tickLine={false} />
+                  <YAxis
+                    width={56}
+                    tickCount={4}
+                    tickFormatter={formatAxisTick}
+                    stroke="var(--border)"
+                    tick={AXIS_TICK}
+                    tickLine={false}
+                  />
                   <Tooltip
                     content={(props) => (
                       <ChartTooltip {...props} unit={chart.unit} digits={chart.digits} />

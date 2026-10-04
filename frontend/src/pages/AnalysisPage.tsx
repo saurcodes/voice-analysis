@@ -16,6 +16,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatDateTime, relativeTime } from "@/lib/dates";
+import { shortHash } from "@/lib/metrics";
 import { CoachingPanel } from "@/components/analysis/CoachingPanel";
 import { RawPanel } from "@/components/analysis/RawPanel";
 import { SummaryCards } from "@/components/analysis/SummaryCards";
@@ -125,7 +126,7 @@ export function AnalysisPage() {
               Recorded {formatDateTime(analysis.recorded_at)} ({relativeTime(analysis.recorded_at)})
             </p>
             <p className="num text-xs text-muted-foreground">
-              {analysis.analyser_version} / {analysis.config_hash.slice(0, 8)}
+              {analysis.analyser_version} / {shortHash(analysis.config_hash)}
             </p>
           </div>
           <Button type="button" variant="outline" onClick={() => setConfirmOpen(true)}>

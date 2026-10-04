@@ -127,9 +127,19 @@ describe("AnalysisPage", () => {
     expect(screen.getByRole("tab", { name: "Transcript" })).toHaveAttribute("data-state", "active");
   });
 
-  it("triggers a fetch to /raw/metrics when the Metrics download button is clicked", async () => {
+  it("shows the config hash without its sha256: prefix", async () => {
+    server.use(http.get("/api/analyses/:id", () => HttpResponse.json(analysisDetail("default"))));
+    renderPage();
+
+    expect(await screen.findByText(/\/ b60fb688$/)).toBeInTheDocument();
+    expect(screen.queryByText(/sha256:/)).not.toBeInTheDocument();
+  });
+
+  it("triggers a fetch to /raw/metrics when the Metrics download button is clicked, then revokes the object URL", async () => {
     server.use(http.get("/api/analyses/:id", () => HttpResponse.json(analysisDetail("default"))));
     const fetchSpy = vi.spyOn(globalThis, "fetch");
+    // jsdom cannot navigate to a blob: URL; stub the anchor click the download relies on.
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
     renderPage();
     await screen.findByText("practice-run.wav");
@@ -142,7 +152,10 @@ describe("AnalysisPage", () => {
       const called = fetchSpy.mock.calls.some((call) => String(call[0]).includes("/raw/metrics"));
       expect(called).toBe(true);
     });
+    await waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock-url"));
 
+    clickSpy.mockRestore();
     fetchSpy.mockRestore();
   });
 

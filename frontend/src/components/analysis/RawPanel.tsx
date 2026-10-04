@@ -76,7 +76,8 @@ export function RawPanel({
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      URL.revokeObjectURL(url);
+      // Revoking synchronously can cancel the download in some browsers before it starts.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (error) {
       const message = error instanceof ApiError ? String(error.detail) : "Download failed.";
       setErrors((prev) => ({ ...prev, [kind]: message }));

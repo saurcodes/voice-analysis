@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { components } from "@/api/types";
-import { fmt, fmtPercent, formatClockTime, highlightTranscript, isTimelineEmpty } from "./metrics";
+import {
+  fmt,
+  fmtPercent,
+  formatAxisTick,
+  formatClockTime,
+  formatSignedDelta,
+  highlightTranscript,
+  isTimelineEmpty,
+  shortHash,
+} from "./metrics";
 
 type Transcript = components["schemas"]["Transcript"];
 type MetricsReport = components["schemas"]["MetricsReport"];
@@ -32,6 +41,49 @@ describe("fmtPercent", () => {
 
   it("scales a 0..1 fraction to a percent string", () => {
     expect(fmtPercent(0.0625)).toBe("6.3");
+  });
+
+  it("never prints a negative zero", () => {
+    expect(fmtPercent(-0.0001)).toBe("0.0");
+  });
+});
+
+describe("negative zero", () => {
+  it("fmt normalises values that round to -0", () => {
+    expect(fmt(-0.04)).toBe("0.0");
+    expect(fmt(-0)).toBe("0.0");
+    expect(fmt(-0.4, 0)).toBe("0");
+    expect(fmt(-0.05)).toBe("-0.1");
+  });
+
+  it("formatSignedDelta prints an unsigned 0.0 and flags it as zero", () => {
+    expect(formatSignedDelta(undefined, -0.04)).toEqual({ text: "0.0", isZero: true });
+    expect(formatSignedDelta(undefined, 0.04)).toEqual({ text: "0.0", isZero: true });
+    expect(formatSignedDelta(undefined, 2.6)).toEqual({ text: "+2.6", isZero: false });
+    expect(formatSignedDelta(undefined, -1.5)).toEqual({ text: "-1.5", isZero: false });
+    expect(formatSignedDelta(undefined, null)).toEqual({ text: "-", isZero: false });
+  });
+
+  it("formatSignedDelta scales fraction labels to percent before rounding", () => {
+    const label = { label: "Flat endings", unit: "%", meaning: "", kind: "fraction" as const, digits: 1 };
+    expect(formatSignedDelta(label, -0.0004)).toEqual({ text: "0.0", isZero: true });
+    expect(formatSignedDelta(label, 0.052)).toEqual({ text: "+5.2", isZero: false });
+  });
+});
+
+describe("shortHash", () => {
+  it("drops the sha256: prefix before taking 8 characters", () => {
+    expect(shortHash("sha256:b60fb6886079e114c489")).toBe("b60fb688");
+    expect(shortHash("abcdef0123456789")).toBe("abcdef01");
+  });
+});
+
+describe("formatAxisTick", () => {
+  it("keeps tick labels to 3 significant digits", () => {
+    expect(formatAxisTick(0.0123456)).toBe("0.0123");
+    expect(formatAxisTick(12.3456)).toBe("12.3");
+    expect(formatAxisTick(1234)).toBe("1.23K");
+    expect(formatAxisTick(-0)).toBe("0");
   });
 });
 

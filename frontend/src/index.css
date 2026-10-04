@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* animate-in / slide-in-from-* / fade-in-* used by the owned Sheet and Dialog primitives. */
+@import "tw-animate-css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 
@@ -146,4 +148,19 @@ body {
 
 .num {
   @apply font-mono tabular-nums;
+}
+
+/*
+ * tw-animate-css does not check prefers-reduced-motion itself, so its enter/exit keyframes
+ * (and every other CSS animation or transition) collapse to an instant change here. JS-driven
+ * motion (motion/react) checks useReducedMotion() at the call site.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

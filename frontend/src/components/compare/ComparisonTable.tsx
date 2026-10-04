@@ -1,7 +1,7 @@
 import { Fragment } from "react";
-import { Minus, TrendDown, TrendUp, WarningCircle } from "@phosphor-icons/react";
+import { CheckCircle, Minus, WarningCircle } from "@phosphor-icons/react";
 import type { components } from "@/api/types";
-import { formatMetricValue, METRIC_LABELS } from "@/lib/metrics";
+import { formatMetricValue, formatSignedDelta, METRIC_LABELS } from "@/lib/metrics";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -27,15 +27,6 @@ function arrowGlyph(row: ComparisonRow): string {
   return row.delta > 0 ? "↑" : "↓";
 }
 
-/** "+2.6" / "-1.5" / "0.0", applying the path's fraction->percent + digit formatting. */
-function formatSignedDelta(path: string, delta: number | null): string {
-  if (delta === null) return "-";
-  const label = METRIC_LABELS[path];
-  const digits = label?.digits ?? 1;
-  const magnitude = label?.kind === "fraction" ? Math.abs(delta) * 100 : Math.abs(delta);
-  const sign = delta > 0 ? "+" : delta < 0 ? "-" : "";
-  return `${sign}${magnitude.toFixed(digits)}`;
-}
 
 const GROUP_ORDER: Array<{ prefix: string; label: string }> = [
   { prefix: "pitch", label: "Pitch" },
@@ -78,19 +69,22 @@ function VerdictCell({ row }: { row: ComparisonRow }) {
     );
   }
 
-  const arrow = arrowGlyph(row);
-  const delta = formatSignedDelta(row.path, row.delta);
+  const delta = formatSignedDelta(METRIC_LABELS[row.path], row.delta);
+  // A delta that rounds to "0.0" reads as no movement, whatever the server's arrow says.
+  const arrow = delta.isZero ? "→" : arrowGlyph(row);
 
   let icon = <Minus weight="regular" className="size-3.5 text-muted-foreground" aria-hidden="true" />;
   let verdictText = "Changed";
   let verdictClassName = "text-muted-foreground";
 
   if (row.verdict === "improved") {
-    icon = <TrendUp weight="regular" className="size-3.5 text-good" aria-hidden="true" />;
+    // Verdict icons say good/bad, not direction: the arrow beside the delta carries direction
+    // (a lower filler rate is "Improved" with a down arrow).
+    icon = <CheckCircle weight="regular" className="size-3.5 text-good" aria-hidden="true" />;
     verdictText = "Improved";
     verdictClassName = "text-good";
   } else if (row.verdict === "worsened") {
-    icon = <TrendDown weight="regular" className="size-3.5 text-serious" aria-hidden="true" />;
+    icon = <WarningCircle weight="regular" className="size-3.5 text-serious" aria-hidden="true" />;
     verdictText = "Worsened";
     verdictClassName = "text-serious";
   } else if (row.verdict === "unchanged") {
@@ -100,7 +94,7 @@ function VerdictCell({ row }: { row: ComparisonRow }) {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="num text-sm">
-        {delta} {arrow}
+        {delta.text} {arrow}
       </span>
       <span className={`flex items-center gap-1 text-xs ${verdictClassName}`}>
         {icon}

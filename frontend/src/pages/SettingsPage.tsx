@@ -17,11 +17,11 @@ export function SettingsPage() {
             <dl className="mt-3 space-y-2">
               <div className="flex items-center justify-between gap-4">
                 <dt className="text-sm text-muted-foreground">Name</dt>
-                <dd className="font-mono text-sm">{user?.name}</dd>
+                <dd className="text-sm">{user?.name}</dd>
               </div>
               <div className="flex items-center justify-between gap-4">
                 <dt className="text-sm text-muted-foreground">Email</dt>
-                <dd className="font-mono text-sm">{user?.email}</dd>
+                <dd className="text-sm">{user?.email}</dd>
               </div>
             </dl>
           </section>

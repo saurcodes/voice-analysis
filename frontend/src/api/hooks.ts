@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useLocation } from "react-router";
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -76,6 +77,8 @@ export function useSummaries({ limit = 50, offset = 0 }: SummariesParams = {}) {
     queryKey: ["vc", "summaries", { limit, offset }] as const,
     queryFn: () =>
       api.get<AnalysisSummary[]>(`/api/analyses?limit=${limit}&offset=${offset}`),
+    // "Load more" changes the key; keep showing the current rows instead of a skeleton flash.
+    placeholderData: keepPreviousData,
   });
 }
 

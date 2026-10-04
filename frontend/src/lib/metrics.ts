@@ -10,17 +10,41 @@ import type { components } from "@/api/types";
 type MetricsReport = components["schemas"]["MetricsReport"];
 type Transcript = components["schemas"]["Transcript"];
 
-/** "-" for null/undefined/NaN; otherwise value.toFixed(digits). Zero em-dashes anywhere
- * in this app: every "not available" render is the plain ASCII hyphen. */
+/** value.toFixed(digits), except a value that rounds to zero never prints as "-0.0". */
+function toFixedNoNegativeZero(value: number, digits: number): string {
+  const s = value.toFixed(digits);
+  return /^-0(\.0*)?$/.test(s) ? s.slice(1) : s;
+}
+
+/** "-" for null/undefined/NaN; otherwise value.toFixed(digits) ("-0.0" normalised to "0.0").
+ * Zero em-dashes anywhere in this app: every "not available" render is the plain ASCII
+ * hyphen. */
 export function fmt(value: number | null | undefined, digits = 1): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
-  return value.toFixed(digits);
+  return toFixedNoNegativeZero(value, digits);
 }
 
 /** Same as fmt(), but for a 0..1 fraction rendered as a percent (0.0625 -> "6.3"). */
 export function fmtPercent(fraction: number | null | undefined, digits = 1): string {
   if (fraction === null || fraction === undefined || Number.isNaN(fraction)) return "-";
   return fmt(fraction * 100, digits);
+}
+
+/** The first 8 characters of a config hash, without its "sha256:" algorithm prefix. */
+export function shortHash(hash: string): string {
+  return hash.replace(/^sha256:/, "").slice(0, 8);
+}
+
+const axisTickFormat = new Intl.NumberFormat("en", {
+  maximumSignificantDigits: 3,
+  notation: "compact",
+});
+
+/** Y-axis tick label: at most 3 significant digits ("0.0123", "1.23", "12.3K") so small
+ * decimals fit the axis instead of clipping, and never "-0". */
+export function formatAxisTick(value: number): string {
+  if (!Number.isFinite(value)) return "";
+  return value === 0 ? "0" : axisTickFormat.format(value);
 }
 
 /** "0:00" / "1:05" for a chart x-axis tick or table cell given a seconds offset. */
@@ -159,6 +183,24 @@ export const METRIC_LABELS: Record<string, MetricLabel> = {
 export function formatMetricValue(label: MetricLabel | undefined, value: number | null | undefined): string {
   const digits = label?.digits ?? 1;
   return label?.kind === "fraction" ? fmtPercent(value, digits) : fmt(value, digits);
+}
+
+/**
+ * "+2.6" / "-1.5" / "0.0" for a comparison delta, applying the label's fraction->percent and
+ * digit formatting. A delta that rounds to zero at the display precision prints "0.0" with no
+ * sign (never "-0.0" or "+0.0"); `isZero` tells the caller to show the neutral arrow too.
+ */
+export function formatSignedDelta(
+  label: MetricLabel | undefined,
+  delta: number | null,
+): { text: string; isZero: boolean } {
+  if (delta === null || Number.isNaN(delta)) return { text: "-", isZero: false };
+  const digits = label?.digits ?? 1;
+  const magnitude = label?.kind === "fraction" ? Math.abs(delta) * 100 : Math.abs(delta);
+  const text = toFixedNoNegativeZero(magnitude, digits);
+  const isZero = Number(text) === 0;
+  if (isZero) return { text, isZero };
+  return { text: `${delta > 0 ? "+" : "-"}${text}`, isZero };
 }
 
 /** The 8 Summary cards, in display order, as paths into METRIC_LABELS. */

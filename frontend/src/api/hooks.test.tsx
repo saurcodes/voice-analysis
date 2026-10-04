@@ -7,7 +7,7 @@ import { server } from "@/test/msw";
 import { MockAuthProvider } from "@/test/MockAuthProvider";
 import type { AuthState } from "@/auth/context";
 import { jobStatus, summary } from "@/test/fixtures";
-import { useJobs, useSummaries } from "./hooks";
+import { useApi, useJobs, useSummaries } from "./hooks";
 
 function buildAuth(overrides: Partial<AuthState> = {}): AuthState {
   return {
@@ -36,6 +36,49 @@ function createWrapper(auth: AuthState = buildAuth()) {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+test("useApi's onUnauthorized signs in again with the current path and search as returnTo", async () => {
+  server.use(http.get("/api/me", () => HttpResponse.json({ detail: "expired" }, { status: 401 })));
+  const signin = vi.fn(async () => {});
+  const auth = buildAuth({ signin });
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <MockAuthProvider auth={auth} queryClient={queryClient} route="/compare?ids=a,b">
+        {children}
+      </MockAuthProvider>
+    );
+  }
+
+  const { result } = renderHook(() => useApi(), { wrapper: Wrapper });
+  await expect(result.current.get("/api/me")).rejects.toMatchObject({ status: 401 });
+
+  expect(signin).toHaveBeenCalledTimes(1);
+  expect(signin).toHaveBeenCalledWith("/compare?ids=a,b");
+});
+
+test("useSummaries keeps the previous page's data while the next page loads", async () => {
+  server.use(
+    http.get("/api/analyses", async ({ request }) => {
+      const offset = new URL(request.url).searchParams.get("offset");
+      if (offset === "0") return HttpResponse.json([summary({ id: "first-page" })]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return HttpResponse.json([summary({ id: "second-page" })]);
+    }),
+  );
+
+  const { result, rerender } = renderHook(({ offset }) => useSummaries({ limit: 1, offset }), {
+    wrapper: createWrapper(),
+    initialProps: { offset: 0 },
+  });
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+  rerender({ offset: 1 });
+  expect(result.current.isPlaceholderData).toBe(true);
+  expect(result.current.data?.[0]).toMatchObject({ id: "first-page" });
+
+  await waitFor(() => expect(result.current.data?.[0]).toMatchObject({ id: "second-page" }));
 });
 
 test("useSummaries resolves with the fixture summaries list", async () => {

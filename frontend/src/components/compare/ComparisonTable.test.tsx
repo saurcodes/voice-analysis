@@ -52,6 +52,41 @@ test("unavailable row shows n/a with no arrow, plus the gaps badge for its parti
   expect(scoped.getByLabelText("not available")).toBeInTheDocument();
 });
 
+test("an improved row with a downward delta keeps the down arrow beside a non-directional verdict icon", () => {
+  renderTable();
+
+  const row = screen.getByText("Long pauses").closest("tr");
+  expect(row).not.toBeNull();
+  const scoped = within(row!);
+  expect(scoped.getByText(/^-2(\.0)? ↓$/)).toBeInTheDocument();
+  const verdict = scoped.getByText("Improved");
+  // CheckCircle, not a TrendUp/TrendDown glyph that could contradict the arrow.
+  expect(verdict.querySelector("svg")).not.toBeNull();
+  expect(verdict.innerHTML).not.toMatch(/trend/i);
+});
+
+test("a delta that rounds to zero prints 0.0 with the neutral arrow, never -0.0", () => {
+  const data = comparison();
+  data.rows = [
+    {
+      path: "pitch.f0_range_st",
+      direction: "up_good",
+      values: [10.82, 10.8],
+      step_deltas: [-0.02],
+      delta: -0.02,
+      arrow: "↓",
+      verdict: "unchanged",
+      partial: false,
+    },
+  ];
+  renderWithProviders(<ComparisonTable comparison={data} recordingNames={["Take 1", "Take 2"]} />);
+
+  const row = screen.getByText("Pitch range").closest("tr");
+  const scoped = within(row!);
+  expect(scoped.getByText("0.0 →")).toBeInTheDocument();
+  expect(scoped.queryByText(/-0\.0/)).not.toBeInTheDocument();
+});
+
 test("the gaps badge is keyboard-focusable and shows its explanation on focus", async () => {
   renderTable();
 
