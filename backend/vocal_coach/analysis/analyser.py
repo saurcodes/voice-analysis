@@ -20,7 +20,7 @@ from vocal_coach.analysis.quality import RecordingQualityBlock
 from vocal_coach.analysis.schema import SCHEMA_VERSION, MetricsReport, SourceInfo
 from vocal_coach.analysis.serialise import to_canonical_json
 from vocal_coach.analysis.timeline import TimelineBlock
-from vocal_coach.analysis.tracks import extract_tracks
+from vocal_coach.analysis.tracks import Tracks, extract_tracks
 from vocal_coach.analysis.voice_quality import VoiceQualityBlock
 from vocal_coach.config import AppConfig, config_hash, load_config
 
@@ -68,11 +68,16 @@ def _empty_report(source: SourceInfo, cfg: AppConfig) -> MetricsReport:
     )
 
 
-def analyse_wav(wav_path: Path, cfg: AppConfig, source: SourceInfo) -> MetricsReport:
-    sound = parselmouth.Sound(str(wav_path))
-    if sound.get_total_duration() < cfg.analysis.min_duration_s:
+def analyse_wav(
+    wav_path: Path, cfg: AppConfig, source: SourceInfo, tracks: Tracks | None = None,
+) -> MetricsReport:
+    if tracks is None:
+        sound = parselmouth.Sound(str(wav_path))
+        if sound.get_total_duration() < cfg.analysis.min_duration_s:
+            return _empty_report(source, cfg)
+        tracks = extract_tracks(sound, cfg.analysis)
+    elif tracks.duration_s < cfg.analysis.min_duration_s:
         return _empty_report(source, cfg)
-    tracks = extract_tracks(sound, cfg.analysis)
 
     phr = phrasing.compute(tracks, cfg.analysis)
     rq = quality.compute(tracks, cfg.analysis, phr.phrases)

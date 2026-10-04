@@ -102,3 +102,20 @@ def test_analyse_file_extracts_then_analyses(cfg, tmp_path: Path):
     assert report.source.original_sample_rate == 16000
     assert len(report.source.content_sha256) == 64
     assert (tmp_path / "work" / "in.wav").exists()
+
+
+def test_analyse_wav_with_precomputed_tracks_is_identical(cfg, tmp_path: Path, monkeypatch):
+    import parselmouth
+    from vocal_coach.analysis import analyser as mod
+    from vocal_coach.analysis.tracks import extract_tracks
+
+    wav = synth.write_wav(tmp_path / "s.wav", _speechlike())
+    src = _source(wav, 10.8)
+    baseline = to_canonical_json(analyse_wav(wav, cfg, src))
+    tracks = extract_tracks(parselmouth.Sound(str(wav)), cfg.analysis)
+
+    def boom(*a, **k):  # analyse_wav must not re-extract when tracks are supplied
+        raise AssertionError("extract_tracks called despite precomputed tracks")
+
+    monkeypatch.setattr(mod, "extract_tracks", boom)
+    assert to_canonical_json(analyse_wav(wav, cfg, src, tracks=tracks)) == baseline
