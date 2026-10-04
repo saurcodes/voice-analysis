@@ -8,6 +8,15 @@ export interface AuthUser {
 export interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
+  /**
+   * The oidc-client-ts navigator method currently in flight ("signinSilent",
+   * "signinRedirect", ...), if any. isLoading is also true for the whole duration of any of
+   * these, including a background silent renew on an already-authenticated session, so
+   * consumers that only want to gate on "do we not have a session yet" (RequireAuth's
+   * full-page skeleton) should check `isLoading && !isAuthenticated` rather than isLoading
+   * alone.
+   */
+  activeNavigator?: string;
   user: AuthUser | null;
   getToken: () => Promise<string>;
   signin: (returnTo?: string) => Promise<void>;

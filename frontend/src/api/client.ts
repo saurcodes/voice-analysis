@@ -127,7 +127,10 @@ export function createApi(
             {
               ...init,
               method: "POST",
-              headers: { "Content-Type": "application/json", ...init?.headers },
+              headers:
+                body === undefined
+                  ? init?.headers
+                  : { "Content-Type": "application/json", ...init?.headers },
               body: body === undefined ? undefined : JSON.stringify(body),
             },
             opts,
@@ -156,6 +159,9 @@ export function downloadUrl(path: string): string {
 /**
  * Raw Response for streaming/downloads (SSE, file downloads) that can't go through
  * apiFetch's JSON parsing. Same bearer + single renew/retry on 401 as the bound helpers.
+ * Unlike createApi()'s helpers, this has no onUnauthorized: a Response that's still 401
+ * after the retry is just returned as-is, and the caller is responsible for checking
+ * `response.status` and handling a persistent 401 (e.g. redirecting to login) itself.
  */
 export async function authFetch(
   path: string,

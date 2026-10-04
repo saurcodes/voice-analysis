@@ -5,19 +5,19 @@ const KEYCLOAK_URL = import.meta.env.VITE_KEYCLOAK_URL ?? "http://localhost:8080
 const KEYCLOAK_REALM = import.meta.env.VITE_KEYCLOAK_REALM ?? "vocal-coach";
 const KEYCLOAK_CLIENT_ID = import.meta.env.VITE_KEYCLOAK_CLIENT_ID ?? "vocal-coach-web";
 
-interface SigninState {
-  returnTo?: string;
-}
-
 /**
- * Strips the OIDC `code`/`state` query params left by the authorization redirect and
- * sends the user back to wherever RequireAuth sent them before signin (or "/" by
- * default). Keycloak access tokens last 300s; see src/auth/context.tsx for renewal.
+ * Strips the OIDC `code`/`state` query params left by the authorization redirect, leaving
+ * the browser on the current pathname (redirect_uri is always `${origin}/`, so that's "/").
+ *
+ * This does NOT also navigate to the signin's `returnTo` state: a raw
+ * `history.replaceState()` call changes the address bar but isn't observed by React Router
+ * v7's BrowserRouter (it only reacts to navigation through its own history object), so
+ * jumping straight to `returnTo` from here would leave `<Routes>` still rendering "/" while
+ * the URL shows the real destination. That hop happens in SigninCallbackRedirect
+ * (src/auth/AuthProvider.tsx), which runs inside the Router tree and calls useNavigate().
  */
-function onSigninCallback(user: { state?: unknown } | undefined): void {
-  const state = user?.state as SigninState | undefined;
-  const returnTo = state?.returnTo ?? "/";
-  window.history.replaceState({}, document.title, returnTo);
+function onSigninCallback(): void {
+  window.history.replaceState({}, document.title, window.location.pathname);
 }
 
 export const oidcConfig: AuthProviderProps = {

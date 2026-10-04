@@ -12,6 +12,20 @@ test("renders children when authenticated", () => {
   expect(screen.getByText("secret content")).toBeInTheDocument();
 });
 
+test("keeps rendering children during a background renew on an already-authenticated session", () => {
+  // react-oidc-context sets isLoading: true for the whole duration of ANY navigator call,
+  // including signinSilent() triggered mid-session by getToken() or automaticSilentRenew.
+  // Regression guard: this must not unmount the page / show the skeleton.
+  const { container } = renderWithProviders(
+    <RequireAuth>
+      <p>secret content</p>
+    </RequireAuth>,
+    { auth: { isAuthenticated: true, isLoading: true, activeNavigator: "signinSilent" } },
+  );
+  expect(screen.getByText("secret content")).toBeInTheDocument();
+  expect(container.querySelector('[aria-busy="true"]')).not.toBeInTheDocument();
+});
+
 test("shows a busy full-page skeleton while loading, without rendering children", () => {
   const { container } = renderWithProviders(
     <RequireAuth>
