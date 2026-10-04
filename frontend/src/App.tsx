@@ -4,6 +4,7 @@ import { ThemeProvider } from "@/lib/theme";
 import { AuthProvider } from "@/auth/AuthProvider";
 import { RequireAuth } from "@/auth/RequireAuth";
 import { AnalysisPage } from "@/pages/AnalysisPage";
+import { ComparePage } from "@/pages/ComparePage";
 import { LibraryPage } from "@/pages/LibraryPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -39,6 +40,14 @@ function App() {
                 element={
                   <RequireAuth>
                     <AnalysisPage />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/compare"
+                element={
+                  <RequireAuth>
+                    <ComparePage />
                   </RequireAuth>
                 }
               />

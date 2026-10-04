@@ -38,6 +38,15 @@ export interface MetricLabel {
   unit: string;
   /** One-line plain-language meaning shown under the value. */
   meaning: string;
+  /**
+   * "fraction" marks a raw 0..1 ratio that should be rendered as a percent (via
+   * fmtPercent/formatMetricValue below) rather than as a bare number; absent means render
+   * with fmt() as-is. Added for Task 6 (Compare page), which formats table and chart values
+   * generically from this map instead of per-field fmt()/fmtPercent() calls.
+   */
+  kind?: "fraction";
+  /** Decimal digits passed to fmt()/fmtPercent() when formatting generically; defaults to 1. */
+  digits?: number;
 }
 
 /**
@@ -58,6 +67,12 @@ export const METRIC_LABELS: Record<string, MetricLabel> = {
     unit: "st",
     meaning: "How much pitch varies, in semitones.",
   },
+  "pitch.creak_fraction_below_100hz": {
+    label: "Creak below 100 Hz",
+    unit: "%",
+    meaning: "Share of voiced speech with creaky (vocal fry) pitch below 100 Hz.",
+    kind: "fraction",
+  },
   "intonation.flat_pct": {
     label: "Flat endings",
     unit: "%",
@@ -67,6 +82,12 @@ export const METRIC_LABELS: Record<string, MetricLabel> = {
     label: "Pauses per minute",
     unit: "/min",
     meaning: "How often you pause while speaking.",
+  },
+  "phrasing.long_pause_count_ge_1s": {
+    label: "Long pauses",
+    unit: "",
+    meaning: "Pauses of a second or more.",
+    digits: 0,
   },
   "pace.articulation_rate_syl_per_sec": {
     label: "Articulation rate",
@@ -78,6 +99,34 @@ export const METRIC_LABELS: Record<string, MetricLabel> = {
     unit: "",
     meaning: "Phrases whose volume quietly fades near the end.",
   },
+  "energy.final_vs_body_db": {
+    label: "Final vs body loudness",
+    unit: "dB",
+    meaning: "How much quieter (or louder) the final stretch is than the rest of the recording.",
+  },
+  "articulation.hf_energy_ratio_db": {
+    label: "High-frequency energy",
+    unit: "dB",
+    meaning: "Relative energy in the high-frequency band, a proxy for crisp articulation.",
+  },
+  "articulation.modulation_depth": {
+    label: "Modulation depth",
+    unit: "",
+    meaning: "How strongly the syllable rhythm rises and falls.",
+    digits: 2,
+  },
+  "articulation.vowel_space.vowel_space_area_hz2": {
+    label: "Vowel space area",
+    unit: "Hz²",
+    meaning: "How distinct vowels sound from each other.",
+    digits: 0,
+  },
+  "articulation.weak_peak_fraction": {
+    label: "Weak syllable peaks",
+    unit: "%",
+    meaning: "Share of syllables with a weak, under-articulated peak.",
+    kind: "fraction",
+  },
   "transcript.derived.fillers_per_min": {
     label: "Fillers per minute",
     unit: "/min",
@@ -87,8 +136,30 @@ export const METRIC_LABELS: Record<string, MetricLabel> = {
     label: "Eaten words",
     unit: "%",
     meaning: "Share of words whose ending drops out and becomes hard to hear.",
+    kind: "fraction",
+  },
+  "transcript.derived.clarity.low_conf_word_fraction": {
+    label: "Low-confidence words",
+    unit: "%",
+    meaning: "Share of words the transcriber was not confident about.",
+    kind: "fraction",
+  },
+  "transcript.derived.clarity.rushed_word_fraction": {
+    label: "Rushed words",
+    unit: "%",
+    meaning: "Share of words spoken in a rushed run.",
+    kind: "fraction",
   },
 };
+
+/** "-" for null, "6.3" / "42" etc. otherwise; picks fmt() vs fmtPercent() and the digit count
+ * from a METRIC_LABELS entry (Task 6's Compare page formats generically from the map instead
+ * of per-field calls like SummaryCards does). Falls back to fmt() with 1 digit when the path
+ * has no label entry, so an unrecognised path still renders a plain number instead of crashing. */
+export function formatMetricValue(label: MetricLabel | undefined, value: number | null | undefined): string {
+  const digits = label?.digits ?? 1;
+  return label?.kind === "fraction" ? fmtPercent(value, digits) : fmt(value, digits);
+}
 
 /** The 8 Summary cards, in display order, as paths into METRIC_LABELS. */
 export const SUMMARY_CARD_PATHS = [
