@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel
 
 from vocal_coach.auth.deps import CurrentUser, get_current_user
+from vocal_coach.config import AnalysisConfig, ArticulationConfig, ClarityConfig, ComparisonConfig
 
 router = APIRouter(tags=["config"])
 
 
-@router.get("/config/public")
-def config_public(request: Request, _user: CurrentUser = Depends(get_current_user)) -> dict:
+class PublicConfig(BaseModel):
+    analysis: AnalysisConfig
+    articulation: ArticulationConfig
+    clarity: ClarityConfig
+    comparison: ComparisonConfig
+
+
+@router.get("/config/public", response_model=PublicConfig)
+def config_public(request: Request, _user: CurrentUser = Depends(get_current_user)) -> PublicConfig:
     cfg = request.app.state.cfg
-    return {"analysis": cfg.analysis.model_dump(), "articulation": cfg.articulation.model_dump(),
-            "clarity": cfg.clarity.model_dump(), "comparison": cfg.comparison.model_dump()}
+    return PublicConfig(analysis=cfg.analysis, articulation=cfg.articulation, clarity=cfg.clarity,
+                        comparison=cfg.comparison)

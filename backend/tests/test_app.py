@@ -14,7 +14,7 @@ def test_me_requires_auth_and_upserts_user(tmp_path):
         assert r.status_code == 200
         body = r.json()
         assert body["username"] == "user1" and body["drive_connected"] is False
-        assert body["llm_enabled"] is True and body["llm_provider"] == "openai_compatible"
+        assert body["llm_enabled"] is False and body["llm_provider"] is None  # until Plan 6 wires a provider
         with ctx["session_factory"]() as s:
             user = repo.upsert_user(s, "sub-42", None, None)  # already exists; id stable
             assert str(user.id) == body["id"]
@@ -48,6 +48,27 @@ def test_lifespan_fails_stale_jobs(tmp_path):
         r = client.get(f"/api/jobs/{stale.id}", headers=ctx["auth"]("sub-1"))
         assert r.status_code == 200
         assert r.json()["status"] == "failed" and r.json()["error"] == "server restarted"
+
+
+def test_openapi_documents_the_contract_plan5_needs(tmp_path):
+    app, ctx = make_test_app(tmp_path)
+    with TestClient(app) as client:
+        spec = client.get("/openapi.json").json()
+        upload = spec["paths"]["/api/analyses"]["post"]
+        form = upload["requestBody"]["content"]["multipart/form-data"]["schema"]
+        assert form["required"] == ["file"] and form["properties"]["file"] == {"type": "string", "format": "binary"}
+        assert form["properties"]["recorded_at"]["format"] == "date-time"
+        assert {"202", "501"} <= set(upload["responses"])
+        schemas = spec["components"]["schemas"]
+        for name in ("MetricsReport", "Transcript", "PublicConfig", "LlmModels", "ComparisonResult",
+                     "AnalysisSummary", "JobStatus", "AnalysisDetail"):
+            assert name in schemas, name
+        assert schemas["JobStatus"]["properties"]["status"]["enum"] == ["queued", "running", "done", "failed"]
+        assert "class" in schemas["PhraseContour"]["properties"]  # serialised by alias, as stored
+        assert {"404", "501"} <= set(spec["paths"]["/api/analyses/{analysis_id}/coach"]["post"]["responses"])
+        assert {"202", "409", "410"} <= set(spec["paths"]["/api/jobs/{job_id}/retry"]["post"]["responses"])
+        assert "/api/jobs" in spec["paths"]
+        assert client.get("/api/me", headers=ctx["auth"]()).json()["llm_enabled"] is False
 
 
 def test_cors_allows_frontend_origin(tmp_path):

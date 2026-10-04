@@ -37,3 +37,15 @@ def test_comparison_validation_and_scoping(tmp_path):
         assert client.get("/api/comparisons?ids=nope,also", headers=ctx["auth"]("alice")).status_code == 400
         assert client.get(f"/api/comparisons?ids={a},{uuid.uuid4()}", headers=ctx["auth"]("alice")).status_code == 404
         assert client.get(f"/api/comparisons?ids={a},{b}", headers=ctx["auth"]("bob")).status_code == 404
+
+
+def test_comparison_caps_the_number_of_ids(tmp_path):
+    from vocal_coach.api.comparisons import MAX_COMPARE_IDS
+
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        too_many = ",".join(str(uuid.uuid4()) for _ in range(MAX_COMPARE_IDS + 1))
+        r = client.get(f"/api/comparisons?ids={too_many}", headers=ctx["auth"]())
+        assert r.status_code == 400 and str(MAX_COMPARE_IDS) in r.json()["detail"]
+        at_cap = ",".join(str(uuid.uuid4()) for _ in range(MAX_COMPARE_IDS))
+        assert client.get(f"/api/comparisons?ids={at_cap}", headers=ctx["auth"]()).status_code == 404  # allowed, unknown

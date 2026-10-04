@@ -12,6 +12,7 @@ from vocal_coach.storage.comparison import ComparisonResult, compare, from_row
 
 router = APIRouter(tags=["comparisons"])
 MIN_IDS = 2
+MAX_COMPARE_IDS = 50  # keeps payloads and the N-row fetch bounded
 
 
 def _parse_ids(raw: str) -> list[uuid.UUID]:
@@ -22,6 +23,8 @@ def _parse_ids(raw: str) -> list[uuid.UUID]:
     unique = list(dict.fromkeys(ids))
     if len(unique) < MIN_IDS:
         raise HTTPException(400, f"need at least {MIN_IDS} distinct ids")
+    if len(unique) > MAX_COMPARE_IDS:
+        raise HTTPException(400, f"at most {MAX_COMPARE_IDS} ids per comparison")
     return unique
 
 

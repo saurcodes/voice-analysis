@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request as StarletteRequest
 
 from tests import synth
-from tests.api_fixtures import make_test_app
+from tests.api_fixtures import fake_metrics, fake_transcript, make_test_app
 from tests.conftest import requires_ffmpeg
 from vocal_coach.api.analyses import _download_filename, _reject_if_declared_too_large
 from vocal_coach.storage import repo
@@ -34,10 +34,7 @@ def fake_job_fn(req, database_url, config_path):
             s, req.user_id, file_name=req.file_name, drive_file_id=None, content_sha256=wav_sha,
             source_sha256=source_sha,
             recorded_at=req.recorded_at, analyser_version="0.1.0", config_hash="sha256:test",
-            metrics_json={"pitch": {"f0_median_hz": 123.0, "f0_range_st": 9.0}, "phrasing": {"pauses_per_min": 10.0},
-                          "intonation": {"flat_pct": 30.0}, "pace": {"articulation_rate_syl_per_sec": 4.0},
-                          "energy": {"trailing_off_count": 2}},
-            transcript_json={"derived": {"fillers_per_min": 1.5}, "text": "hi"}, speaker_context=req.speaker_context,
+            metrics_json=fake_metrics(), transcript_json=fake_transcript(), speaker_context=req.speaker_context,
         )
         repo.update_job(s, req.job_id, status="done", stage="done", progress_pct=100, analysis_id=row.id)
     engine.dispose()
@@ -74,6 +71,9 @@ def test_upload_creates_job_and_analysis_visible_in_list_and_detail(tmp_path):
         assert listing[0]["f0_median_hz"] == 123.0 and listing[0]["has_transcript"] is True and listing[0]["has_coaching"] is False
         detail = client.get(f"/api/analyses/{job['analysis_id']}", headers=ctx["auth"]()).json()
         assert detail["metrics"]["pitch"]["f0_range_st"] == 9.0 and detail["speaker_context"] == "sales pitch"
+        contours = detail["metrics"]["intonation"]["per_phrase"]
+        assert contours and all("class" in c and "class_" not in c for c in contours)  # alias on the wire
+        assert detail["transcript"]["derived"]["fillers_per_min"] == 1.5
         raw = client.get(f"/api/analyses/{job['analysis_id']}/raw/metrics", headers=ctx["auth"]())
         assert raw.status_code == 200 and raw.headers["content-disposition"].endswith('clip.metrics.json"')
         assert raw.text == json.dumps(detail["metrics"], sort_keys=True, separators=(",", ":"), ensure_ascii=False)

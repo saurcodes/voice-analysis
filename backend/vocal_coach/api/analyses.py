@@ -21,11 +21,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from vocal_coach.analysis.schema import MetricsReport
 from vocal_coach.auth.deps import CurrentUser, get_current_user, get_session
 from vocal_coach.api.jobs import submit_or_503
 from vocal_coach.pipeline import JobRequest
 from vocal_coach.storage import paths, repo
 from vocal_coach.storage.repo import AnalysisSummary
+from vocal_coach.transcription.schema import Transcript
 
 router = APIRouter(tags=["analyses"])
 
@@ -49,8 +51,8 @@ class AnalysisDetail(BaseModel):
     analysed_at: datetime
     analyser_version: str
     config_hash: str
-    metrics: dict
-    transcript: dict | None
+    metrics: MetricsReport
+    transcript: Transcript | None
     speaker_context: str | None
     coaching: dict | None
     coaching_warnings: list | None
@@ -132,7 +134,29 @@ async def _store_upload(file: UploadFile, data_dir: Path, user_id: uuid.UUID, ma
     return final, sha, size
 
 
-@router.post("/analyses", status_code=status.HTTP_202_ACCEPTED, response_model=JobIds)
+# The route reads the multipart form itself (so it can 413 before parsing and 501 on JSON), which hides
+# the body from FastAPI's schema generation; declare it here so generated clients see the real contract.
+UPLOAD_OPENAPI = {
+    "requestBody": {"required": True, "content": {"multipart/form-data": {"schema": {
+        "type": "object", "required": ["file"],
+        "properties": {
+            "file": {"type": "string", "format": "binary"},
+            "speaker_context": {"type": "string"},
+            "llm_enabled": {"type": "boolean"},
+            "llm_model": {"type": "string"},
+            "recorded_at": {"type": "string", "format": "date-time"},
+        },
+    }}}},
+    "responses": {
+        "413": {"description": "file too large"},
+        "415": {"description": "unsupported file type"},
+        "501": {"description": "Drive source not available yet"},
+        "503": {"description": "job runner unavailable"},
+    },
+}
+
+
+@router.post("/analyses", status_code=status.HTTP_202_ACCEPTED, response_model=JobIds, openapi_extra=UPLOAD_OPENAPI)
 async def create_analysis(
     request: Request,
     user: CurrentUser = Depends(get_current_user),
