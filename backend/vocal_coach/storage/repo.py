@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 
 from pydantic import BaseModel
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -162,6 +162,11 @@ def delete_analysis(session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID
     result = session.execute(delete(Analysis).where(Analysis.user_id == user_id, Analysis.id == analysis_id))
     _commit(session)
     return result.rowcount == ROWS_PER_ID
+
+
+def count_analyses_with_sha(session: Session, user_id: uuid.UUID, content_sha256: str) -> int:
+    return int(session.scalar(select(func.count()).select_from(Analysis).where(
+        Analysis.user_id == user_id, Analysis.content_sha256 == content_sha256)) or 0)
 
 
 def set_coaching(

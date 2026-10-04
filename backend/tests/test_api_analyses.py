@@ -1,0 +1,128 @@
+import io
+import json
+import uuid
+from datetime import datetime, timezone
+
+from fastapi.testclient import TestClient
+
+from tests import synth
+from tests.api_fixtures import make_test_app
+from vocal_coach.storage import repo
+from vocal_coach.storage.db import make_engine, make_session_factory
+
+
+def fake_job_fn(req, database_url, config_path):
+    """Pretend the pipeline ran: store a tiny analysis and finish the job.
+
+    Uses the real byte sha of the uploaded file so dedupe and file cleanup behave as in production.
+    """
+    import hashlib
+
+    sha = hashlib.sha256(req.source_path.read_bytes()).hexdigest()
+    engine = make_engine(database_url)
+    with make_session_factory(engine)() as s:
+        row = repo.create_analysis(
+            s, req.user_id, file_name=req.file_name, drive_file_id=None, content_sha256=sha,
+            recorded_at=req.recorded_at, analyser_version="0.1.0", config_hash="sha256:test",
+            metrics_json={"pitch": {"f0_median_hz": 123.0, "f0_range_st": 9.0}, "phrasing": {"pauses_per_min": 10.0},
+                          "intonation": {"flat_pct": 30.0}, "pace": {"articulation_rate_syl_per_sec": 4.0},
+                          "energy": {"trailing_off_count": 2}},
+            transcript_json={"derived": {"fillers_per_min": 1.5}, "text": "hi"}, speaker_context=req.speaker_context,
+        )
+        repo.update_job(s, req.job_id, status="done", stage="done", progress_pct=100, analysis_id=row.id)
+    engine.dispose()
+
+
+def failing_job_fn(req, database_url, config_path):
+    engine = make_engine(database_url)
+    with make_session_factory(engine)() as s:
+        repo.update_job(s, req.job_id, status="failed", error="boom")
+    engine.dispose()
+
+
+def _wav_bytes(seconds=1.0) -> bytes:
+    from scipy.io import wavfile
+    buf = io.BytesIO()
+    wavfile.write(buf, synth.SR, (synth.tone(120, seconds) * 32767).astype("int16"))
+    return buf.getvalue()
+
+
+def _upload(client, headers, name="clip.wav", data=None, **form):
+    return client.post("/api/analyses", headers=headers, files={"file": (name, data or _wav_bytes(), "audio/wav")}, data=form)
+
+
+def test_upload_creates_job_and_analysis_visible_in_list_and_detail(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        r = _upload(client, ctx["auth"](), speaker_context="sales pitch")
+        assert r.status_code == 202
+        job_id = r.json()["job_ids"][0]
+        job = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).json()
+        assert job["status"] == "done" and job["analysis_id"]
+        listing = client.get("/api/analyses", headers=ctx["auth"]()).json()
+        assert len(listing) == 1 and listing[0]["file_name"] == "clip.wav"
+        assert listing[0]["f0_median_hz"] == 123.0 and listing[0]["has_transcript"] is True and listing[0]["has_coaching"] is False
+        detail = client.get(f"/api/analyses/{job['analysis_id']}", headers=ctx["auth"]()).json()
+        assert detail["metrics"]["pitch"]["f0_range_st"] == 9.0 and detail["speaker_context"] == "sales pitch"
+        raw = client.get(f"/api/analyses/{job['analysis_id']}/raw/metrics", headers=ctx["auth"]())
+        assert raw.status_code == 200 and raw.headers["content-disposition"].endswith('clip.metrics.json"')
+        assert raw.text == json.dumps(detail["metrics"], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        assert client.get(f"/api/analyses/{job['analysis_id']}/raw/coaching", headers=ctx["auth"]()).status_code == 404
+        stored = list((tmp_path / "data" / "uploads").rglob("*.wav"))
+        assert len(stored) == 1
+
+
+def test_cross_user_is_404_everywhere(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        job_id = _upload(client, ctx["auth"]("alice")).json()["job_ids"][0]
+        analysis_id = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]("alice")).json()["analysis_id"]
+        bob = ctx["auth"]("bob")
+        assert client.get(f"/api/jobs/{job_id}", headers=bob).status_code == 404
+        assert client.get(f"/api/analyses/{analysis_id}", headers=bob).status_code == 404
+        assert client.delete(f"/api/analyses/{analysis_id}", headers=bob).status_code == 404
+        assert client.get("/api/analyses", headers=bob).json() == []
+        assert client.post(f"/api/analyses/{analysis_id}/coach", headers=bob).status_code == 404
+        assert client.post(f"/api/analyses/{analysis_id}/coach", headers=ctx["auth"]("alice")).status_code == 501
+
+
+def test_delete_removes_row_and_upload_file(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        job_id = _upload(client, ctx["auth"]()).json()["job_ids"][0]
+        analysis_id = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).json()["analysis_id"]
+        assert list((tmp_path / "data" / "uploads").rglob("*.wav"))
+        assert client.delete(f"/api/analyses/{analysis_id}", headers=ctx["auth"]()).status_code == 204
+        assert client.get(f"/api/analyses/{analysis_id}", headers=ctx["auth"]()).status_code == 404
+        assert not list((tmp_path / "data" / "uploads").rglob("*.wav"))
+
+
+def test_upload_validation(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn, max_upload_mb=1)
+    with TestClient(app) as client:
+        assert _upload(client, ctx["auth"](), name="notes.txt", data=b"hello").status_code == 415
+        big = b"\0" * (1024 * 1024 + 1)
+        r = _upload(client, ctx["auth"](), name="big.mp3", data=big)
+        assert r.status_code == 413
+        assert not list((tmp_path / "data" / "uploads").rglob("*"))  # partial upload removed
+        r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": ["x"]})
+        assert r.status_code == 501
+        assert client.post("/api/analyses", files={"file": ("a.wav", b"x", "audio/wav")}).status_code == 401
+
+
+def test_failed_job_is_visible(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=failing_job_fn)
+    with TestClient(app) as client:
+        job_id = _upload(client, ctx["auth"]()).json()["job_ids"][0]
+        job = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).json()
+        assert job["status"] == "failed" and job["error"] == "boom"
+
+
+def test_list_pagination(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        for i in range(3):
+            _upload(client, ctx["auth"](), name=f"c{i}.wav", data=_wav_bytes(1.0 + 0.1 * i))
+        assert len(client.get("/api/analyses?limit=2", headers=ctx["auth"]()).json()) == 2
+        assert len(client.get("/api/analyses?limit=2&offset=2", headers=ctx["auth"]()).json()) == 1
+        assert client.get("/api/analyses?limit=0", headers=ctx["auth"]()).status_code == 422

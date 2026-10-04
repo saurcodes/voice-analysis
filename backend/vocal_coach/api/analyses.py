@@ -1,6 +1,165 @@
-"""Analyses endpoints. Filled in Task 5."""
+"""Upload, list, detail, raw download and delete for a user's analyses."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+import hashlib
+import json
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.responses import Response as RawResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from starlette.datastructures import UploadFile as StarletteUploadFile
+
+from vocal_coach.auth.deps import CurrentUser, get_current_user, get_session
+from vocal_coach.pipeline import JobRequest
+from vocal_coach.storage import repo
+from vocal_coach.storage.repo import AnalysisSummary
 
 router = APIRouter(tags=["analyses"])
+
+ALLOWED_EXTENSIONS = frozenset({"m4a", "mp3", "wav", "mov", "mp4"})  # spec §5
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+UPLOADS_SUBDIR = "uploads"
+RAW_KINDS = ("metrics", "transcript", "coaching")
+LIST_LIMIT_MIN, LIST_LIMIT_MAX, LIST_LIMIT_DEFAULT = 1, 200, repo.SUMMARY_PAGE_SIZE
+
+
+class JobIds(BaseModel):
+    job_ids: list[uuid.UUID]
+
+
+class AnalysisDetail(BaseModel):
+    id: uuid.UUID
+    file_name: str
+    drive_file_id: str | None
+    recorded_at: datetime
+    analysed_at: datetime
+    analyser_version: str
+    config_hash: str
+    metrics: dict
+    transcript: dict | None
+    speaker_context: str | None
+    coaching: dict | None
+    coaching_warnings: list | None
+
+
+def _detail(row) -> AnalysisDetail:
+    return AnalysisDetail(id=row.id, file_name=row.file_name, drive_file_id=row.drive_file_id,
+                          recorded_at=row.recorded_at, analysed_at=row.analysed_at, analyser_version=row.analyser_version,
+                          config_hash=row.config_hash, metrics=row.metrics_json, transcript=row.transcript_json,
+                          speaker_context=row.speaker_context, coaching=row.coaching_json,
+                          coaching_warnings=row.coaching_warnings)
+
+
+async def _store_upload(file: UploadFile, dest_dir: Path, max_bytes: int) -> tuple[Path, str, int]:
+    """Stream to a temp file, hashing as we go. Returns (final_path, sha256, size). Raises 413 on overflow."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    tmp = dest_dir / f".upload-{uuid.uuid4().hex}.part"
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with open(tmp, "wb") as out:
+            while chunk := await file.read(UPLOAD_CHUNK_BYTES):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"file exceeds {max_bytes} bytes")
+                digest.update(chunk)
+                out.write(chunk)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        try:
+            dest_dir.rmdir()  # only succeeds if empty; leaves existing uploads for this user untouched
+        except OSError:
+            pass
+        raise
+    finally:
+        await file.close()
+    sha = digest.hexdigest()
+    ext = Path(file.filename or "").suffix.lower().lstrip(".")
+    final = dest_dir / f"{sha}.{ext}"
+    if final.exists():
+        tmp.unlink(missing_ok=True)
+    else:
+        tmp.replace(final)
+    return final, sha, size
+
+
+@router.post("/analyses", status_code=status.HTTP_202_ACCEPTED, response_model=JobIds)
+async def create_analysis(
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("application/json"):
+        # JSON body (Drive source) — Plan 7
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "drive is not available yet")
+    async with request.form() as form:  # closes the UploadFile's spooled temp file on exit, even on error
+        file = form.get("file")
+        if not isinstance(file, StarletteUploadFile):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "file is required")
+        speaker_context = form.get("speaker_context") or None
+        llm_enabled = str(form.get("llm_enabled", "false")).strip().lower() in {"1", "true", "yes", "on"}
+        llm_model = form.get("llm_model") or None
+        ext = Path(file.filename or "").suffix.lower().lstrip(".")
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"unsupported file type .{ext}; allowed: {sorted(ALLOWED_EXTENSIONS)}")
+        settings = request.app.state.settings
+        dest_dir = settings.data_dir / UPLOADS_SUBDIR / str(user.id)
+        path, sha, _size = await _store_upload(file, dest_dir, settings.max_upload_bytes)
+        job = repo.create_job(session, user.id)
+        req = JobRequest(job_id=job.id, user_id=user.id, source_path=path, file_name=file.filename or path.name,
+                         recorded_at=datetime.now(timezone.utc), speaker_context=speaker_context,
+                         llm_enabled=llm_enabled, llm_model=llm_model)
+        request.app.state.runner.submit(req)
+        return JobIds(job_ids=[job.id])
+
+
+@router.get("/analyses", response_model=list[AnalysisSummary])
+def list_analyses(
+    limit: int = Query(LIST_LIMIT_DEFAULT, ge=LIST_LIMIT_MIN, le=LIST_LIMIT_MAX),
+    offset: int = Query(0, ge=0),
+    user: CurrentUser = Depends(get_current_user), session: Session = Depends(get_session),
+):
+    return repo.list_analysis_summaries(session, user.id, limit=limit, offset=offset)
+
+
+@router.get("/analyses/{analysis_id}", response_model=AnalysisDetail)
+def get_analysis(analysis_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), session: Session = Depends(get_session)):
+    row = repo.get_analysis(session, user.id, analysis_id)
+    if row is None:
+        raise HTTPException(404, "analysis not found")
+    return _detail(row)
+
+
+@router.get("/analyses/{analysis_id}/raw/{kind}")
+def get_raw(analysis_id: uuid.UUID, kind: str, user: CurrentUser = Depends(get_current_user), session: Session = Depends(get_session)):
+    if kind not in RAW_KINDS:
+        raise HTTPException(404, f"unknown kind {kind!r}")
+    row = repo.get_analysis(session, user.id, analysis_id)
+    if row is None:
+        raise HTTPException(404, "analysis not found")
+    payload = {"metrics": row.metrics_json, "transcript": row.transcript_json, "coaching": row.coaching_json}[kind]
+    if payload is None:
+        raise HTTPException(404, f"no {kind} for this analysis")
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)  # JSONB reorders keys
+    stem = Path(row.file_name).stem
+    return RawResponse(body, media_type="application/json",
+                       headers={"Content-Disposition": f'attachment; filename="{stem}.{kind}.json"'})
+
+
+@router.delete("/analyses/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_analysis(analysis_id: uuid.UUID, request: Request, user: CurrentUser = Depends(get_current_user),
+                    session: Session = Depends(get_session)):
+    row = repo.get_analysis(session, user.id, analysis_id)
+    if row is None:
+        raise HTTPException(404, "analysis not found")
+    sha = row.content_sha256
+    repo.delete_analysis(session, user.id, analysis_id)
+    if repo.count_analyses_with_sha(session, user.id, sha) == 0:
+        for f in (request.app.state.settings.data_dir / UPLOADS_SUBDIR / str(user.id)).glob(f"{sha}.*"):
+            f.unlink(missing_ok=True)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
