@@ -7,6 +7,7 @@ ends as a CoachResult with coaching=None and a readable warning.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -20,6 +21,7 @@ from vocal_coach.llm.schema import COACHING_SCHEMA, CoachingOutput
 log = logging.getLogger(__name__)
 
 INVALID_OUTPUT = "invalid model output"
+PREVIOUS_ERROR_MAX_CHARS = 500
 
 
 @dataclass
@@ -41,9 +43,17 @@ def _call(provider: LLMProvider, prompt: str, payload: dict, model: str) -> tupl
 
 
 def run_coaching(
-    provider: LLMProvider, payload: dict, *, model: str, system_prompt: str | None = None
+    provider: LLMProvider,
+    payload: dict,
+    *,
+    model: str,
+    system_prompt: str | None = None,
+    deadline_s: float | None = None,
 ) -> CoachResult:
+    """deadline_s: when the first call has already taken longer than this, an invalid answer is
+    not retried (a second slow call would double the wait); it ends as an invalid-output warning."""
     prompt = system_prompt or load_system_prompt()
+    started = time.monotonic()
 
     raw, failure = _call(provider, prompt, payload, model)
     if failure is not None:
@@ -52,7 +62,10 @@ def run_coaching(
     try:
         output = CoachingOutput.model_validate(raw)
     except ValidationError as err:
-        retry_payload = payload | {"previous_error": str(err)}
+        if deadline_s is not None and time.monotonic() - started > deadline_s:
+            log.warning("coaching validation retry skipped: deadline of %ss exceeded", deadline_s)
+            return CoachResult(None, [f"{INVALID_OUTPUT}: {str(err)[:200]}"])
+        retry_payload = payload | {"previous_error": str(err)[:PREVIOUS_ERROR_MAX_CHARS]}
         raw, failure = _call(provider, prompt, retry_payload, model)
         if failure is not None:
             return failure

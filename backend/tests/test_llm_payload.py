@@ -1,4 +1,6 @@
-from vocal_coach.llm.payload import CAP, build_payload
+import json
+
+from vocal_coach.llm.payload import CAP, build_payload, summarise_timeline
 from vocal_coach.llm.prompts import load_system_prompt
 
 
@@ -96,3 +98,70 @@ def test_load_system_prompt_returns_bundled_markdown():
     assert text.startswith("You are a vocal delivery coach.")
     assert "marked_up_example" in text
     assert chr(0x2014) not in text
+
+
+def _timeline(n: int) -> dict:
+    return {
+        "window_s": 5.0,
+        "windows": [
+            {"start_s": i * 5.0, "end_s": i * 5.0 + 5.0, "f0_median_hz": 110.0 + (i % 40) * 1.2345,
+             "f0_sd_st": 2.0 + (i % 7) * 0.111, "intensity_median_db": 60.0 + (i % 11) * 0.5}
+            for i in range(n)
+        ],
+    }
+
+
+def test_long_recording_payload_is_small():
+    transcript = {"text": " ".join(f"word{i}" for i in range(13_000)), "derived": {"word_count": 13_000}}
+    payload = build_payload({"timeline": _timeline(360), "pitch": {"f0_median_hz": 120.0}}, transcript, None, None)
+
+    assert "timeline" not in payload["metrics"]
+    assert payload["metrics"]["timeline_summary"]["window_count"] == 360
+    assert len(json.dumps(payload, sort_keys=True).encode("utf-8")) < 40_000
+
+
+def test_timeline_summary_values_skip_nulls():
+    timeline = {
+        "window_s": 2.0,
+        "windows": [
+            {"start_s": 0.0, "end_s": 2.0, "f0_median_hz": 100.0, "f0_sd_st": None, "intensity_median_db": 60.0},
+            {"start_s": 2.0, "end_s": 4.0, "f0_median_hz": None, "f0_sd_st": None, "intensity_median_db": 70.0},
+            {"start_s": 4.0, "end_s": 6.0, "f0_median_hz": 140.0, "f0_sd_st": None, "intensity_median_db": 65.5},
+            {"start_s": 6.0, "end_s": 8.0, "f0_median_hz": 120.0, "f0_sd_st": None, "intensity_median_db": None},
+        ],
+    }
+    assert summarise_timeline(timeline) == {
+        "window_s": 2.0,
+        "window_count": 4,
+        "f0_median_hz": {"min": 100.0, "p50": 120.0, "max": 140.0},
+        "f0_sd_st": {"min": None, "p50": None, "max": None},
+        "intensity_median_db": {"min": 60.0, "p50": 65.5, "max": 70.0},
+    }
+
+
+def test_build_payload_replaces_timeline_with_summary():
+    payload = build_payload({"timeline": {"window_s": 1.0, "windows": []}}, None, None, None)
+    assert payload["metrics"] == {"timeline_summary": {
+        "window_s": 1.0, "window_count": 0,
+        "f0_median_hz": {"min": None, "p50": None, "max": None},
+        "f0_sd_st": {"min": None, "p50": None, "max": None},
+        "intensity_median_db": {"min": None, "p50": None, "max": None},
+    }}
+
+
+def test_transcript_truncated_to_max_words_with_flags():
+    transcript = {"text": "one two three four five", "derived": None}
+    payload = build_payload({}, transcript, None, None, max_transcript_words=3)
+    assert payload["transcript_text"] == "one two three"
+    assert payload["transcript_truncated"] is True
+    assert payload["transcript_word_count"] == 5
+
+
+def test_transcript_not_truncated_flags_present():
+    payload = build_payload({}, {"text": "one two"}, None, None, max_transcript_words=3)
+    assert payload["transcript_text"] == "one two"
+    assert payload["transcript_truncated"] is False
+    assert payload["transcript_word_count"] == 2
+
+    empty = build_payload({}, None, None, None)
+    assert empty["transcript_truncated"] is False and empty["transcript_word_count"] == 0

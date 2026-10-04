@@ -211,3 +211,87 @@ def test_timeout_on_fallback_request_raises_llm_error(httpx_mock):
         provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL)
 
     assert len(httpx_mock.get_requests()) == 2
+
+
+def test_fenced_json_content_is_parsed(httpx_mock):
+    fenced = "```json\n" + json.dumps(VALID_ANSWER) + "\n```"
+    httpx_mock.add_response(**_chat_response(fenced))
+
+    provider = OpenAICompatibleProvider(_cfg(), _settings())
+    assert provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL) == VALID_ANSWER
+
+
+def test_bare_fence_content_is_parsed(httpx_mock):
+    fenced = "```\n" + json.dumps(VALID_ANSWER) + "\n```\n"
+    httpx_mock.add_response(**_chat_response(fenced))
+
+    provider = OpenAICompatibleProvider(_cfg(), _settings())
+    assert provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL) == VALID_ANSWER
+
+
+def test_think_prefix_is_stripped(httpx_mock):
+    content = "<think>\nThe user wants {json}.\nOk.\n</think>\n" + json.dumps(VALID_ANSWER)
+    httpx_mock.add_response(**_chat_response(content))
+
+    provider = OpenAICompatibleProvider(_cfg(), _settings())
+    assert provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL) == VALID_ANSWER
+
+
+def test_brace_slice_recovers_json_wrapped_in_prose(httpx_mock):
+    content = "Here is your coaching: " + json.dumps(VALID_ANSWER) + " Hope this helps."
+    httpx_mock.add_response(**_chat_response(content))
+
+    provider = OpenAICompatibleProvider(_cfg(), _settings())
+    assert provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL) == VALID_ANSWER
+
+
+def test_finish_reason_length_raises_truncated(httpx_mock):
+    httpx_mock.add_response(
+        status_code=200, url=CHAT_URL, method="POST",
+        json={"choices": [{"message": {"content": '{"what_improved": ['}, "finish_reason": "length"}]},
+    )
+
+    provider = OpenAICompatibleProvider(_cfg(), _settings())
+    with pytest.raises(LLMError, match="model response truncated"):
+        provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL)
+
+
+def test_422_falls_back_to_json_object(httpx_mock):
+    httpx_mock.add_response(**_chat_response("", status_code=422))
+    httpx_mock.add_response(**_chat_response(json.dumps(VALID_ANSWER)))
+
+    provider = OpenAICompatibleProvider(_cfg(), _settings())
+    assert provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL) == VALID_ANSWER
+    assert json.loads(httpx_mock.get_requests()[1].content)["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 429])
+def test_non_schema_4xx_does_not_fall_back(httpx_mock, status):
+    httpx_mock.add_response(**_chat_response("", status_code=status))
+
+    provider = OpenAICompatibleProvider(_cfg(), _settings())
+    with pytest.raises(LLMError, match=f"openai-compatible error {status}"):
+        provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL)
+
+    assert len(httpx_mock.get_requests()) == 1
+
+
+def test_chat_timeout_is_10s_connect_and_configured_read(httpx_mock):
+    httpx_mock.add_response(**_chat_response(json.dumps(VALID_ANSWER)))
+
+    provider = OpenAICompatibleProvider(_cfg(timeout_s=77.0), _settings())
+    provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL)
+
+    timeout = httpx_mock.get_requests()[0].extensions["timeout"]
+    assert timeout["connect"] == 10.0
+    assert timeout["read"] == 77.0
+
+
+def test_list_models_timeout_is_10s(httpx_mock):
+    httpx_mock.add_response(url=MODELS_URL, method="GET", json={"data": [{"id": "a"}]})
+
+    provider = OpenAICompatibleProvider(_cfg(timeout_s=300.0), _settings())
+    provider.list_models()
+
+    timeout = httpx_mock.get_requests()[0].extensions["timeout"]
+    assert timeout == {"connect": 10.0, "read": 10.0, "write": 10.0, "pool": 10.0}

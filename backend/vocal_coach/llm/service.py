@@ -99,8 +99,9 @@ def coach_analysis(
 
     try:
         comparison = coaching_comparison(session, user_id, row, cfg)
-        payload = build_payload(row.metrics_json, row.transcript_json, comparison, context)
-        result = run_coaching(provider, payload, model=resolved_model)
+        payload = build_payload(row.metrics_json, row.transcript_json, comparison, context,
+                                max_transcript_words=cfg.llm.max_transcript_words)
+        result = run_coaching(provider, payload, model=resolved_model, deadline_s=cfg.llm.timeout_s)
     except Exception as e:  # run_coaching degrades known failures itself; this is a last resort
         message = f"coaching failed: {type(e).__name__}"
         log.warning("analysis %s: %s", analysis_id, message)

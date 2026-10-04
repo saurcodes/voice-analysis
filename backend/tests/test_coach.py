@@ -101,3 +101,42 @@ def test_original_payload_not_mutated_by_retry():
 
     assert payload_copy == PAYLOAD
     assert "previous_error" not in payload_copy
+
+
+def test_retry_skipped_when_first_call_exceeds_deadline(monkeypatch):
+    import vocal_coach.llm.coach as coach_mod
+
+    ticks = iter([0.0, 50.0])
+    monkeypatch.setattr(coach_mod.time, "monotonic", lambda: next(ticks))
+    invalid = {"what_improved": [], "what_is_lacking": [], "next_steps": []}
+    provider = FakeProvider([invalid, VALID])
+
+    result = run_coaching(provider, PAYLOAD, model="fake-1", deadline_s=30.0)
+
+    assert result.coaching is None
+    assert len(result.warnings) == 1 and result.warnings[0].startswith(INVALID_OUTPUT)
+    assert len(provider.calls) == 1
+
+
+def test_retry_runs_when_within_deadline(monkeypatch):
+    import vocal_coach.llm.coach as coach_mod
+
+    ticks = iter([0.0, 5.0])
+    monkeypatch.setattr(coach_mod.time, "monotonic", lambda: next(ticks))
+    invalid = {"what_improved": [], "what_is_lacking": [], "next_steps": []}
+    provider = FakeProvider([invalid, VALID])
+
+    result = run_coaching(provider, PAYLOAD, model="fake-1", deadline_s=30.0)
+
+    assert result.coaching == VALID
+    assert len(provider.calls) == 2
+
+
+def test_previous_error_is_truncated_to_500_chars():
+    invalid = {"what_improved": list(range(200)), "what_is_lacking": [], "next_steps": []}
+    provider = FakeProvider([invalid, VALID])
+
+    run_coaching(provider, PAYLOAD, model="fake-1")
+
+    previous_error = provider.calls[1]["previous_error"]
+    assert 0 < len(previous_error) <= 500

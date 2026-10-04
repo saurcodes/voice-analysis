@@ -67,13 +67,13 @@ class FakeModels:
 class FakeAnthropicClient:
     """Stands in for anthropic.Anthropic(...): records constructor kwargs."""
 
-    last_instance: "FakeAnthropicClient | None" = None
+    instances: list["FakeAnthropicClient"] = []
 
     def __init__(self, **kwargs):
         self.init_kwargs = kwargs
         self.messages = FakeMessages()
         self.models = FakeModels()
-        FakeAnthropicClient.last_instance = self
+        FakeAnthropicClient.instances.append(self)
 
 
 def _message(stop_reason: str, text: str | None):
@@ -86,13 +86,16 @@ def test_constructor_raises_when_api_key_missing():
         AnthropicProvider(_cfg(), _settings(api_key=None))
 
 
-def test_constructor_builds_client_with_key_timeout_and_max_retries(monkeypatch):
+def test_constructor_builds_generation_client_without_retries_and_default_models_client(monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropicClient)
-    AnthropicProvider(_cfg(timeout_s=7.0), _settings(api_key="secret"))
-    client = FakeAnthropicClient.last_instance
-    assert client.init_kwargs["api_key"] == "secret"
-    assert client.init_kwargs["timeout"] == 7.0
-    assert client.init_kwargs["max_retries"] == 1
+    monkeypatch.setattr(FakeAnthropicClient, "instances", [])
+    provider = AnthropicProvider(_cfg(timeout_s=7.0), _settings(api_key="secret"))
+    gen, models = provider._client, provider._models_client
+    assert gen is not models
+    assert {c.init_kwargs["api_key"] for c in FakeAnthropicClient.instances} == {"secret"}
+    assert gen.init_kwargs["timeout"] == 7.0
+    assert gen.init_kwargs["max_retries"] == 0
+    assert "max_retries" not in models.init_kwargs
 
 
 def test_request_shape_has_output_config_system_and_no_temperature_or_tool_choice(monkeypatch):
@@ -107,13 +110,14 @@ def test_request_shape_has_output_config_system_and_no_temperature_or_tool_choic
     assert result == VALID_ANSWER
     kwargs = provider._client.messages.calls[0]
     assert kwargs["model"] == MODEL
-    assert kwargs["max_tokens"] == 512
+    assert kwargs["max_tokens"] == 16000
     assert kwargs["system"] == SYSTEM_PROMPT
     assert kwargs["messages"] == [
         {"role": "user", "content": json.dumps(USER_PAYLOAD, sort_keys=True)}
     ]
     assert kwargs["output_config"] == {
-        "format": {"type": "json_schema", "schema": COACHING_SCHEMA}
+        "effort": "low",
+        "format": {"type": "json_schema", "schema": COACHING_SCHEMA},
     }
     assert "temperature" not in kwargs
     assert "tool_choice" not in kwargs
@@ -218,7 +222,7 @@ def test_other_api_error_maps_to_llm_error(monkeypatch):
 def test_list_models_sorts_ids(monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropicClient)
     provider = AnthropicProvider(_cfg(), _settings())
-    provider._client.models = FakeModels(
+    provider._models_client.models = FakeModels(
         models=[SimpleNamespace(id="zeta"), SimpleNamespace(id="alpha"), SimpleNamespace(id="mid")]
     )
 
@@ -229,7 +233,7 @@ def test_list_models_api_status_error_maps_to_llm_error(monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropicClient)
     provider = AnthropicProvider(_cfg(), _settings())
     response = httpx2.Response(503, request=httpx2.Request("GET", "https://example.invalid"))
-    provider._client.models = FakeModels(exception=anthropic.APIStatusError("x", response=response, body=None))
+    provider._models_client.models = FakeModels(exception=anthropic.APIStatusError("x", response=response, body=None))
 
     with pytest.raises(LLMError, match="anthropic error 503"):
         provider.list_models()
@@ -239,7 +243,7 @@ def test_list_models_connection_error_maps_to_llm_error(monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropicClient)
     provider = AnthropicProvider(_cfg(), _settings())
     exc = anthropic.APITimeoutError(request=httpx2.Request("GET", "https://example.invalid"))
-    provider._client.models = FakeModels(exception=exc)
+    provider._models_client.models = FakeModels(exception=exc)
 
     with pytest.raises(LLMError, match="connection error"):
         provider.list_models()
@@ -248,7 +252,34 @@ def test_list_models_connection_error_maps_to_llm_error(monkeypatch):
 def test_list_models_unexpected_exception_shape_maps_to_llm_error(monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropicClient)
     provider = AnthropicProvider(_cfg(), _settings())
-    provider._client.models = FakeModels(exception=AttributeError("boom"))
+    provider._models_client.models = FakeModels(exception=AttributeError("boom"))
 
     with pytest.raises(LLMError, match="anthropic models listing failed"):
         provider.list_models()
+
+
+def test_effort_low_and_max_tokens_floor_keeps_a_larger_configured_value(monkeypatch):
+    monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropicClient)
+    provider = AnthropicProvider(_cfg(max_output_tokens=20000), _settings())
+    provider._client.messages = FakeMessages(response=_message("end_turn", json.dumps(VALID_ANSWER)))
+
+    provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL)
+
+    kwargs = provider._client.messages.calls[0]
+    assert kwargs["output_config"]["effort"] == "low"
+    assert kwargs["max_tokens"] == 20000
+
+
+def test_thinking_block_before_text_block_still_parses(monkeypatch):
+    monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropicClient)
+    provider = AnthropicProvider(_cfg(), _settings())
+    response = SimpleNamespace(
+        stop_reason="end_turn",
+        content=[
+            SimpleNamespace(type="thinking", thinking="let me think", signature="abc"),
+            SimpleNamespace(type="text", text=json.dumps(VALID_ANSWER)),
+        ],
+    )
+    provider._client.messages = FakeMessages(response=response)
+
+    assert provider.generate_coaching(SYSTEM_PROMPT, USER_PAYLOAD, COACHING_SCHEMA, model=MODEL) == VALID_ANSWER

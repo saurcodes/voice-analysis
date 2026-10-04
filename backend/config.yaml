@@ -66,3 +66,4 @@ llm:
   allowed_models: []
   seed: 42
   timeout_s: 120
+  max_transcript_words: 1500

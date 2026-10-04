@@ -98,6 +98,7 @@ class LLMConfig(BaseModel):
     seed: int = 42
     timeout_s: float = 120.0
     max_output_tokens: int = 2048
+    max_transcript_words: int = 1500
 
 
 class AppConfig(BaseModel):
