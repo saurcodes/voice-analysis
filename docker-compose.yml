@@ -48,7 +48,7 @@ services:
       KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8080/realms/vocal-coach}
       KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-vocal-coach-web}
       KEYCLOAK_JWKS_URL_OVERRIDE: http://keycloak:8080/realms/vocal-coach/protocol/openid-connect/certs
-      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
       DATA_DIR: /data
       JOB_WORKERS: ${JOB_WORKERS:-1}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-500}
@@ -61,6 +61,17 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_KEYCLOAK_URL: ${VITE_KEYCLOAK_URL:-http://localhost:8080}
+        VITE_KEYCLOAK_REALM: ${VITE_KEYCLOAK_REALM:-vocal-coach}
+        VITE_KEYCLOAK_CLIENT_ID: ${VITE_KEYCLOAK_CLIENT_ID:-vocal-coach-web}
+    ports: ["3000:80"]
+    depends_on:
+      - backend
 
 volumes:
   pgdata:

@@ -138,3 +138,9 @@ once the upload has been cleaned up). A worker process that dies (OOM kill, segf
   `speaker_context`). Plan 6 should run coaching against the existing row when `llm_enabled` is set.
 - Retry re-uses `file_name`, the upload and `recorded_at`, but not `speaker_context` or the LLM options.
 - Multipart uploads are buffered to a spooled temp file by Starlette before the size backstop runs (Plan 8).
+
+## Frontend (Plan 5)
+
+The React UI lives in `frontend/`; see `frontend/README.md` for the dev loop, tests, regenerating
+API types, design tokens, chart colors and the SSE client. `docker compose up -d --build` (above)
+also builds and starts it as the `frontend` service, served by nginx on `http://localhost:3000`.

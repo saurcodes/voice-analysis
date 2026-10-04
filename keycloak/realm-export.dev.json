@@ -17,7 +17,7 @@
       "serviceAccountsEnabled": false,
       "redirectUris": ["http://localhost:5173/*", "http://localhost:3000/*"],
       "webOrigins": ["http://localhost:5173", "http://localhost:3000"],
-      "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "http://localhost:5173/*"},
+      "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "http://localhost:5173/*##http://localhost:3000/*"},
       "protocolMappers": [
         {
           "name": "vocal-coach-web audience",
