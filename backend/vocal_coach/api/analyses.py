@@ -22,16 +22,15 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from vocal_coach.auth.deps import CurrentUser, get_current_user, get_session
-from vocal_coach.jobs.runner import RunnerUnavailable
+from vocal_coach.api.jobs import submit_or_503
 from vocal_coach.pipeline import JobRequest
-from vocal_coach.storage import repo
+from vocal_coach.storage import paths, repo
 from vocal_coach.storage.repo import AnalysisSummary
 
 router = APIRouter(tags=["analyses"])
 
 ALLOWED_EXTENSIONS = frozenset({"m4a", "mp3", "wav", "mov", "mp4"})  # spec §5
 UPLOAD_CHUNK_BYTES = 1024 * 1024
-UPLOADS_SUBDIR = "uploads"
 RAW_KINDS = ("metrics", "transcript", "coaching")
 LIST_LIMIT_MIN, LIST_LIMIT_MAX, LIST_LIMIT_DEFAULT = 1, 200, repo.SUMMARY_PAGE_SIZE
 SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
@@ -86,8 +85,22 @@ def _detail(row) -> AnalysisDetail:
                           coaching_warnings=row.coaching_warnings)
 
 
-async def _store_upload(file: UploadFile, dest_dir: Path, max_bytes: int) -> tuple[Path, str, int]:
+def _parse_recorded_at(raw) -> datetime:
+    """Optional ISO-8601 `recorded_at` form field; must carry a timezone. Defaults to now (UTC)."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return datetime.now(timezone.utc)
+    try:
+        value = datetime.fromisoformat(str(raw).strip())
+    except ValueError:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "recorded_at must be an ISO-8601 datetime")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "recorded_at must include a timezone offset")
+    return value
+
+
+async def _store_upload(file: UploadFile, data_dir: Path, user_id: uuid.UUID, max_bytes: int) -> tuple[Path, str, int]:
     """Stream to a temp file, hashing as we go. Returns (final_path, sha256, size). Raises 413 on overflow."""
+    dest_dir = paths.uploads_dir(data_dir, user_id)
     dest_dir.mkdir(parents=True, exist_ok=True)
     tmp = dest_dir / f".upload-{uuid.uuid4().hex}.part"
     digest = hashlib.sha256()
@@ -111,7 +124,7 @@ async def _store_upload(file: UploadFile, dest_dir: Path, max_bytes: int) -> tup
         await file.close()
     sha = digest.hexdigest()
     ext = Path(file.filename or "").suffix.lower().lstrip(".")
-    final = dest_dir / f"{sha}.{ext}"
+    final = paths.upload_path(data_dir, user_id, sha, ext)
     if final.exists():
         tmp.unlink(missing_ok=True)
     else:
@@ -135,23 +148,20 @@ async def create_analysis(
         if not isinstance(file, StarletteUploadFile):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "file is required")
         speaker_context = form.get("speaker_context") or None
+        recorded_at = _parse_recorded_at(form.get("recorded_at"))
         llm_enabled = str(form.get("llm_enabled", "false")).strip().lower() in {"1", "true", "yes", "on"}
         llm_model = form.get("llm_model") or None
         ext = Path(file.filename or "").suffix.lower().lstrip(".")
         if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"unsupported file type .{ext}; allowed: {sorted(ALLOWED_EXTENSIONS)}")
         settings = request.app.state.settings
-        dest_dir = settings.data_dir / UPLOADS_SUBDIR / str(user.id)
-        path, sha, _size = await _store_upload(file, dest_dir, settings.max_upload_bytes)
-        job = repo.create_job(session, user.id)
-        req = JobRequest(job_id=job.id, user_id=user.id, source_path=path, file_name=file.filename or path.name,
-                         recorded_at=datetime.now(timezone.utc), speaker_context=speaker_context,
-                         llm_enabled=llm_enabled, llm_model=llm_model)
-        try:
-            request.app.state.runner.submit(req)
-        except RunnerUnavailable:
-            repo.update_job(session, job.id, status="failed", error="job runner unavailable")
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "job runner unavailable; try again")
+        path, sha, _size = await _store_upload(file, settings.data_dir, user.id, settings.max_upload_bytes)
+        file_name = Path(file.filename or "").name or path.name  # strip any client-side directories
+        job = repo.create_job(session, user.id, file_name=file_name, source_sha256=sha, recorded_at=recorded_at)
+        req = JobRequest(job_id=job.id, user_id=user.id, source_path=path, file_name=file_name,
+                         recorded_at=recorded_at, speaker_context=speaker_context,
+                         llm_enabled=llm_enabled, llm_model=llm_model, source_sha256=sha)
+        submit_or_503(request, session, job.id, req)
         return JobIds(job_ids=[job.id])
 
 
@@ -194,9 +204,8 @@ def delete_analysis(analysis_id: uuid.UUID, request: Request, user: CurrentUser 
     row = repo.get_analysis(session, user.id, analysis_id)
     if row is None:
         raise HTTPException(404, "analysis not found")
-    sha = row.content_sha256
+    source_sha = row.source_sha256  # the upload's name; content_sha256 is the extracted WAV's hash
     repo.delete_analysis(session, user.id, analysis_id)
-    if repo.count_analyses_with_sha(session, user.id, sha) == 0:
-        for f in (request.app.state.settings.data_dir / UPLOADS_SUBDIR / str(user.id)).glob(f"{sha}.*"):
-            f.unlink(missing_ok=True)
+    if source_sha and repo.count_source_refs(session, user.id, source_sha) == 0:
+        paths.remove_upload(request.app.state.settings.data_dir, user.id, source_sha)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

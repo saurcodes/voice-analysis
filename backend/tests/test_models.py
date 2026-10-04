@@ -24,9 +24,10 @@ def test_tables_and_columns_match_spec(session):
     cols = {c["name"] for c in insp.get_columns("analyses")}
     assert cols == {"id", "user_id", "file_name", "drive_file_id", "content_sha256", "recorded_at", "analysed_at",
                     "analyser_version", "config_hash", "metrics_json", "transcript_json", "speaker_context",
-                    "coaching_json", "coaching_warnings"}
+                    "coaching_json", "coaching_warnings", "source_sha256"}
     assert {c["name"] for c in insp.get_columns("jobs")} == {"id", "user_id", "status", "stage", "progress_pct",
-                                                              "error", "analysis_id", "created_at", "updated_at"}
+                                                              "error", "analysis_id", "created_at", "updated_at",
+                                                              "file_name", "source_sha256", "recorded_at"}
     uniques = [u["column_names"] for u in insp.get_unique_constraints("analyses")]
     assert ["user_id", "content_sha256", "config_hash", "analyser_version"] in uniques
     indexes = {i["name"]: i["column_names"] for i in insp.get_indexes("analyses")}

@@ -74,7 +74,8 @@ class Analysis(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     file_name: Mapped[str] = mapped_column(Text, nullable=False)
     drive_file_id: Mapped[str | None] = mapped_column(Text)
-    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)  # extracted-WAV hash (dedupe key)
+    source_sha256: Mapped[str | None] = mapped_column(String(64))  # uploaded-bytes hash: names the file under uploads/
     recorded_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
     analysed_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, nullable=False)
     analyser_version: Mapped[str] = mapped_column(Text, nullable=False)
@@ -97,5 +98,8 @@ class Job(Base):
     progress_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     error: Mapped[str | None] = mapped_column(Text)
     analysis_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("analyses.id", ondelete="SET NULL"))
+    file_name: Mapped[str | None] = mapped_column(Text)
+    source_sha256: Mapped[str | None] = mapped_column(String(64))
+    recorded_at: Mapped[datetime | None] = mapped_column(TZDateTime)  # carried over by POST /jobs/{id}/retry
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, onupdate=utcnow, nullable=False)

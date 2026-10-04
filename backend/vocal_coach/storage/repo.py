@@ -67,7 +67,7 @@ def find_analysis(
 def create_analysis(
     session: Session, user_id: uuid.UUID, *, file_name: str, drive_file_id: str | None, content_sha256: str,
     recorded_at: datetime, analyser_version: str, config_hash: str, metrics_json: dict,
-    transcript_json: dict | None = None, speaker_context: str | None = None,
+    transcript_json: dict | None = None, speaker_context: str | None = None, source_sha256: str | None = None,
 ) -> Analysis:
     """Insert an analysis. If the same (user, file, config, analyser version) already exists — e.g. the
     same file submitted from two tabs — the existing row is returned instead."""
@@ -75,6 +75,7 @@ def create_analysis(
         user_id=user_id, file_name=file_name, drive_file_id=drive_file_id, content_sha256=content_sha256,
         recorded_at=recorded_at, analyser_version=analyser_version, config_hash=config_hash,
         metrics_json=metrics_json, transcript_json=transcript_json, speaker_context=speaker_context,
+        source_sha256=source_sha256,
     )
     session.add(row)
     try:
@@ -165,9 +166,23 @@ def delete_analysis(session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID
     return result.rowcount == ROWS_PER_ID
 
 
-def count_analyses_with_sha(session: Session, user_id: uuid.UUID, content_sha256: str) -> int:
-    return int(session.scalar(select(func.count()).select_from(Analysis).where(
-        Analysis.user_id == user_id, Analysis.content_sha256 == content_sha256)) or 0)
+def count_source_refs(session: Session, user_id: uuid.UUID, source_sha256: str) -> int:
+    """How many things still need the uploaded file `source_sha256`: the user's analyses made from it plus
+    their unfinished jobs for it. Zero means the upload can be deleted."""
+    analyses = session.scalar(select(func.count()).select_from(Analysis).where(
+        Analysis.user_id == user_id, Analysis.source_sha256 == source_sha256))
+    jobs = session.scalar(select(func.count()).select_from(Job).where(
+        Job.user_id == user_id, Job.source_sha256 == source_sha256, Job.status.not_in(TERMINAL_STATUSES)))
+    return int(analyses or 0) + int(jobs or 0)
+
+
+def set_speaker_context(session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID, text: str | None) -> Analysis | None:
+    row = get_analysis(session, user_id, analysis_id)
+    if row is None:
+        return None
+    row.speaker_context = text
+    _commit(session)
+    return row
 
 
 def set_coaching(
@@ -184,8 +199,11 @@ def set_coaching(
     return row
 
 
-def create_job(session: Session, user_id: uuid.UUID, stage: str = FIRST_JOB_STAGE) -> Job:
-    job = Job(user_id=user_id, status="queued", stage=stage, progress_pct=PROGRESS_MIN)
+def create_job(session: Session, user_id: uuid.UUID, *, file_name: str | None = None,
+               source_sha256: str | None = None, recorded_at: datetime | None = None,
+               stage: str = FIRST_JOB_STAGE) -> Job:
+    job = Job(user_id=user_id, status="queued", stage=stage, progress_pct=PROGRESS_MIN,
+              file_name=file_name, source_sha256=source_sha256, recorded_at=recorded_at)
     session.add(job)
     _commit(session)
     return job

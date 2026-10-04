@@ -51,6 +51,7 @@ class JobRequest:
     speaker_context: str | None = None
     llm_enabled: bool = False
     llm_model: str | None = None
+    source_sha256: str | None = None  # hash of the uploaded bytes; names the upload file (storage.paths)
 
 
 def _as_dict(model) -> dict:
@@ -69,11 +70,20 @@ def run_pipeline(
         try:
             info = extract_wav(req.source_path, wav)
         except (subprocess.CalledProcessError, ValueError) as e:  # not audio, truncated, or no audio stream
-            raise RuntimeError(f"ffmpeg could not decode {req.file_name}: {e}") from e
+            # The job row is user-facing: no server paths or tool output there. Full details go to the log.
+            if isinstance(e, subprocess.CalledProcessError):
+                log.error("job %s: decode failed: cmd=%s stderr=%s", req.job_id, e.cmd, e.stderr)
+            else:
+                log.error("job %s: decode failed: %s", req.job_id, e)
+            raise RuntimeError(f"could not decode {Path(req.file_name).name}: not a supported audio/video file") from e
         progress("extract", STAGE_PROGRESS["extract"])
 
         existing = repo.find_analysis(session, req.user_id, info.content_sha256, config_hash(cfg), ANALYSER_VERSION)
         if existing is not None:
+            # Dedupe hit: keep the stored analysis. A new speaker context replaces the old one.
+            # NOTE (Plan 6): coaching is skipped here; run it against the existing row when llm_enabled.
+            if req.speaker_context and req.speaker_context != existing.speaker_context:
+                repo.set_speaker_context(session, req.user_id, existing.id, req.speaker_context)
             progress("done", STAGE_PROGRESS["done"])
             return existing.id
 
@@ -95,14 +105,15 @@ def run_pipeline(
             transcript_json = None
         progress("transcribe", STAGE_PROGRESS["transcribe"])
 
-        progress("coach", STAGE_PROGRESS["coach"])  # LLM coaching lands in Plan 6
-
+        # Stored before coaching so the coach stage (Plan 6) has the analysis id in hand.
         row = repo.create_analysis(
             session, req.user_id, file_name=req.file_name, drive_file_id=req.drive_file_id,
             content_sha256=info.content_sha256, recorded_at=req.recorded_at,
             analyser_version=report.analyser_version, config_hash=report.config_hash,
             metrics_json=_as_dict(report), transcript_json=transcript_json, speaker_context=req.speaker_context,
+            source_sha256=req.source_sha256,
         )
+        progress("coach", STAGE_PROGRESS["coach"])  # LLM coaching lands in Plan 6
         progress("done", STAGE_PROGRESS["done"])
         return row.id
     finally:

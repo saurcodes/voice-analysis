@@ -10,6 +10,7 @@ from starlette.requests import Request as StarletteRequest
 
 from tests import synth
 from tests.api_fixtures import make_test_app
+from tests.conftest import requires_ffmpeg
 from vocal_coach.api.analyses import _download_filename, _reject_if_declared_too_large
 from vocal_coach.storage import repo
 from vocal_coach.storage.db import make_engine, make_session_factory
@@ -18,15 +19,20 @@ from vocal_coach.storage.db import make_engine, make_session_factory
 def fake_job_fn(req, database_url, config_path):
     """Pretend the pipeline ran: store a tiny analysis and finish the job.
 
-    Uses the real byte sha of the uploaded file so dedupe and file cleanup behave as in production.
+    Mirrors production hashing: the upload is named by the hash of its bytes (`source_sha256`), while
+    `content_sha256` is the extracted WAV's hash — a DIFFERENT value, so cleanup must use the former.
     """
     import hashlib
 
-    sha = hashlib.sha256(req.source_path.read_bytes()).hexdigest()
+    raw = req.source_path.read_bytes()
+    source_sha = hashlib.sha256(raw).hexdigest()
+    assert req.source_sha256 == source_sha
+    wav_sha = hashlib.sha256(b"wav:" + raw).hexdigest()
     engine = make_engine(database_url)
     with make_session_factory(engine)() as s:
         row = repo.create_analysis(
-            s, req.user_id, file_name=req.file_name, drive_file_id=None, content_sha256=sha,
+            s, req.user_id, file_name=req.file_name, drive_file_id=None, content_sha256=wav_sha,
+            source_sha256=source_sha,
             recorded_at=req.recorded_at, analyser_version="0.1.0", config_hash="sha256:test",
             metrics_json={"pitch": {"f0_median_hz": 123.0, "f0_range_st": 9.0}, "phrasing": {"pauses_per_min": 10.0},
                           "intonation": {"flat_pct": 30.0}, "pace": {"articulation_rate_syl_per_sec": 4.0},
@@ -99,6 +105,9 @@ def test_delete_removes_row_and_upload_file(tmp_path):
         assert client.delete(f"/api/analyses/{analysis_id}", headers=ctx["auth"]()).status_code == 204
         assert client.get(f"/api/analyses/{analysis_id}", headers=ctx["auth"]()).status_code == 404
         assert not list((tmp_path / "data" / "uploads").rglob("*.wav"))
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            assert repo.count_source_refs(s, user.id, repo.list_jobs(s, user.id)[0].source_sha256) == 0
 
 
 def test_upload_validation(tmp_path):
@@ -138,6 +147,69 @@ def test_upload_returns_503_and_fails_job_when_runner_unavailable(tmp_path):
             user = repo.upsert_user(s, "user-1", None, None)
             jobs = repo.list_jobs(s, user.id)
         assert len(jobs) == 1 and (jobs[0].status, jobs[0].error) == ("failed", "job runner unavailable")
+
+
+def _uploads(tmp_path):
+    return [p for p in (tmp_path / "data" / "uploads").rglob("*") if p.is_file()]
+
+
+def test_delete_keeps_upload_while_another_analysis_uses_it(tmp_path):
+    """Same bytes analysed under two configs (simulated by a second row) share one upload file."""
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        job_id = _upload(client, ctx["auth"]()).json()["job_ids"][0]
+        first = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).json()["analysis_id"]
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            src = repo.get_analysis(s, user.id, uuid.UUID(first))
+            second = repo.create_analysis(
+                s, user.id, file_name="clip.wav", drive_file_id=None, content_sha256=src.content_sha256,
+                source_sha256=src.source_sha256, recorded_at=src.recorded_at, analyser_version="0.1.0",
+                config_hash="sha256:other", metrics_json=src.metrics_json)
+        assert client.delete(f"/api/analyses/{first}", headers=ctx["auth"]()).status_code == 204
+        assert len(_uploads(tmp_path)) == 1
+        assert client.delete(f"/api/analyses/{second.id}", headers=ctx["auth"]()).status_code == 204
+        assert _uploads(tmp_path) == []
+
+
+@requires_ffmpeg
+def test_failed_pipeline_removes_the_upload(tmp_path, monkeypatch):
+    """Real worker entry point (synchronously): a file ffmpeg cannot decode fails the job and the upload goes."""
+    from vocal_coach.jobs.runner import run_job
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    app, ctx = make_test_app(tmp_path, job_fn=run_job)
+    with TestClient(app) as client:
+        r = _upload(client, ctx["auth"](), name="talk.mp3", data=b"this is not audio")
+        job = client.get(f"/api/jobs/{r.json()['job_ids'][0]}", headers=ctx["auth"]()).json()
+        assert job["status"] == "failed"
+        assert job["error"] == "could not decode talk.mp3: not a supported audio/video file"
+        assert "/data/" not in job["error"] and "ffprobe" not in job["error"]
+        assert _uploads(tmp_path) == []
+
+
+def test_file_name_is_stripped_of_client_directories(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        job_id = _upload(client, ctx["auth"](), name="../../x/clip.wav").json()["job_ids"][0]
+        job = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).json()
+        assert job["file_name"] == "clip.wav"
+        detail = client.get(f"/api/analyses/{job['analysis_id']}", headers=ctx["auth"]()).json()
+        assert detail["file_name"] == "clip.wav"
+
+
+def test_recorded_at_form_field(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        job_id = _upload(client, ctx["auth"](), recorded_at="2026-09-30T08:15:00+02:00").json()["job_ids"][0]
+        analysis_id = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).json()["analysis_id"]
+        detail = client.get(f"/api/analyses/{analysis_id}", headers=ctx["auth"]()).json()
+        assert datetime.fromisoformat(detail["recorded_at"]) == datetime(2026, 9, 30, 6, 15, tzinfo=timezone.utc)
+        naive = _upload(client, ctx["auth"](), name="b.wav", data=_wav_bytes(1.5), recorded_at="2026-09-30T08:15:00")
+        assert naive.status_code == 422
+        junk = _upload(client, ctx["auth"](), name="c.wav", data=_wav_bytes(1.7), recorded_at="last tuesday")
+        assert junk.status_code == 422
+        assert len(client.get("/api/jobs", headers=ctx["auth"]()).json()) == 1  # rejected uploads made no job
 
 
 def test_list_pagination(tmp_path):

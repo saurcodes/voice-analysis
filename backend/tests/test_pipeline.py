@@ -67,6 +67,40 @@ def test_pipeline_dedupes_same_file_same_config(cfg, session, tmp_path: Path):
 
 
 @requires_ffmpeg
+def test_pipeline_stores_analysis_before_coach_stage(cfg, session, tmp_path: Path):
+    req, user = _req(session, tmp_path)
+    req.source_sha256 = "c" * 64
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+    stored_at_stage: dict[str, int] = {}
+
+    def progress(stage, _pct):
+        stored_at_stage[stage] = len(repo.list_analyses(session, user.id))
+
+    analysis_id = run_pipeline(req, cfg, settings, session, progress, whisper_model=_fake())
+    assert stored_at_stage["transcribe"] == 0 and stored_at_stage["coach"] == 1 and stored_at_stage["done"] == 1
+    row = repo.get_analysis(session, user.id, analysis_id)
+    assert row.source_sha256 == "c" * 64 and row.content_sha256 != row.source_sha256
+
+
+@requires_ffmpeg
+def test_pipeline_dedupe_hit_updates_speaker_context(cfg, session, tmp_path: Path):
+    req1, user = _req(session, tmp_path, "a.wav")
+    req1.speaker_context = "first"
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+    first = run_pipeline(req1, cfg, settings, session, lambda s, p: None, whisper_model=_fake())
+    job2 = repo.create_job(session, user.id)
+    req2 = JobRequest(job_id=job2.id, user_id=user.id, source_path=req1.source_path, file_name="a.wav",
+                      recorded_at=req1.recorded_at, speaker_context="investor pitch")
+    assert run_pipeline(req2, cfg, settings, session, lambda s, p: None, whisper_model=_fake()) == first
+    assert repo.get_analysis(session, user.id, first).speaker_context == "investor pitch"
+    job3 = repo.create_job(session, user.id)
+    req3 = JobRequest(job_id=job3.id, user_id=user.id, source_path=req1.source_path, file_name="a.wav",
+                      recorded_at=req1.recorded_at)  # no context given: keep the stored one
+    run_pipeline(req3, cfg, settings, session, lambda s, p: None, whisper_model=_fake())
+    assert repo.get_analysis(session, user.id, first).speaker_context == "investor pitch"
+
+
+@requires_ffmpeg
 def test_pipeline_survives_whisper_failure(cfg, session, tmp_path: Path):
     class Broken:
         def transcribe(self, *a, **k):
@@ -90,3 +124,5 @@ def test_pipeline_bad_audio_raises_clear_error(cfg, session, tmp_path: Path):
     with pytest.raises(Exception) as e:
         run_pipeline(req, cfg, Settings(_env_file=None, data_dir=tmp_path / "data"), session, lambda s, p: None, whisper_model=_fake())
     assert "ffmpeg" in str(e.value).lower() or "audio" in str(e.value).lower()
+    assert str(e.value) == "could not decode not_audio.mp3: not a supported audio/video file"
+    assert str(tmp_path) not in str(e.value) and "ffprobe" not in str(e.value)

@@ -19,6 +19,7 @@ from vocal_coach.pipeline import JobRequest, run_pipeline
 from vocal_coach.settings import Settings, get_settings
 from vocal_coach.storage import repo as _repo
 from vocal_coach.storage.db import make_engine, make_session_factory
+from vocal_coach.storage.paths import remove_upload
 
 log = logging.getLogger(__name__)
 
@@ -163,11 +164,27 @@ def run_job(req: JobRequest, database_url: str, config_path: str | None, *, whis
                     return
                 log.error("job %s failed:\n%s", req.job_id, traceback.format_exc())
                 _repo.update_job(session, req.job_id, status="failed", error=str(e)[:ERROR_MAX_CHARS])
+                _release_upload(session, settings, req)
     except Exception:  # could not even reach the database/config: log, nothing else to do in a worker
         log.error("job %s could not be recorded:\n%s", req.job_id, traceback.format_exc())
     finally:
         if engine is not None:
             engine.dispose()
+
+
+def _release_upload(session, settings: Settings, req: JobRequest) -> None:
+    """After a pipeline failure, delete the upload unless an analysis or an unfinished job still needs it.
+
+    Only the pipeline-failure path does this: a bad file fails the same way every time. Uploads of jobs
+    failed by the infrastructure (worker crash, restart, runner unavailable) are kept so they can be retried."""
+    if not req.source_sha256:
+        return
+    try:
+        if _repo.count_source_refs(session, req.user_id, req.source_sha256) == 0:
+            removed = remove_upload(settings.data_dir, req.user_id, req.source_sha256)
+            log.info("job %s: removed unreferenced upload %s", req.job_id, [p.name for p in removed])
+    except Exception:  # cleanup is best effort; the job outcome is already recorded
+        log.exception("job %s: could not remove the upload", req.job_id)
 
 
 def make_process_runner(settings: Settings, cfg: AppConfig, config_path: str | None = None, *,

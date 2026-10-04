@@ -65,6 +65,7 @@ def test_run_job_marks_failed_on_bad_input(db, tmp_path: Path, monkeypatch):
         j = repo.get_job(s, user.id, job.id)
         assert j.status == "failed" and j.error and len(j.error) <= ERROR_MAX_CHARS
         assert "ffmpeg" in j.error.lower() or "decode" in j.error.lower()
+        assert "/data/" not in j.error and str(tmp_path) not in j.error and "ffprobe" not in j.error
 
 
 def test_run_job_failure_before_pipeline_is_recorded(db, tmp_path: Path):

@@ -307,3 +307,40 @@ def test_get_analyses_is_scoped_deduped_and_ordered(session):
     got = repo.get_analyses(session, u.id, [late.id, early.id, late.id, foreign.id, uuid.uuid4()])
     assert [a.id for a in got] == [early.id, late.id]
     assert repo.get_analyses(session, u.id, []) == []
+
+
+def test_count_source_refs_counts_analyses_and_unfinished_jobs(session):
+    u = repo.upsert_user(session, "a", None, None)
+    other = repo.upsert_user(session, "b", None, None)
+    src = "f" * 64
+    assert repo.count_source_refs(session, u.id, src) == 0
+    queued = repo.create_job(session, u.id, file_name="a.m4a", source_sha256=src)
+    repo.create_job(session, other.id, source_sha256=src)  # another user's job never counts
+    assert repo.count_source_refs(session, u.id, src) == 1
+    repo.update_job(session, queued.id, status="failed", error="x")
+    assert repo.count_source_refs(session, u.id, src) == 0  # terminal jobs do not hold the upload
+    row = repo.create_analysis(
+        session, u.id, file_name="a.m4a", drive_file_id=None, content_sha256="e" * 64, source_sha256=src,
+        recorded_at=utcnow(), analyser_version="0.1.0", config_hash="sha256:c1", metrics_json={},
+    )
+    assert repo.count_source_refs(session, u.id, src) == 1
+    repo.delete_analysis(session, u.id, row.id)
+    assert repo.count_source_refs(session, u.id, src) == 0
+
+
+def test_set_speaker_context_is_scoped(session):
+    u = repo.upsert_user(session, "a", None, None)
+    other = repo.upsert_user(session, "b", None, None)
+    a = _mk(session, u)
+    assert repo.set_speaker_context(session, other.id, a.id, "nope") is None
+    assert repo.set_speaker_context(session, u.id, a.id, "board update").speaker_context == "board update"
+
+
+def test_list_jobs_filters_and_limits(session):
+    u = repo.upsert_user(session, "a", None, None)
+    jobs = [repo.create_job(session, u.id, file_name=f"{i}.wav") for i in range(3)]
+    repo.update_job(session, jobs[0].id, status="done")
+    assert [j.id for j in repo.list_jobs(session, u.id)] == [j.id for j in reversed(jobs)]
+    assert [j.id for j in repo.list_jobs(session, u.id, status="done")] == [jobs[0].id]
+    assert len(repo.list_jobs(session, u.id, limit=2)) == 2
+    assert repo.job_is_terminal(session, jobs[0].id) and not repo.job_is_terminal(session, jobs[1].id)
