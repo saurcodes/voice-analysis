@@ -32,5 +32,8 @@ dev = ["pytest>=8.0", "testcontainers[postgres]>=4.0", "httpx2>=2.13", "pytest-h
 [tool.setuptools.packages.find]
 include = ["vocal_coach*"]
 
+[tool.setuptools.package-data]
+"vocal_coach.llm.prompts" = ["*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
