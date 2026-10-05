@@ -16,7 +16,9 @@ export function UserMenu() {
 
   return (
     <div className="flex items-center gap-3">
-      <span className="text-sm text-muted-foreground">{user.name}</span>
+      {/* Hidden below md to free up room in the narrow mobile header; AppShell no longer
+          needs a descendant selector to achieve this. */}
+      <span className="hidden text-sm text-muted-foreground md:inline">{user.name}</span>
       <Button
         type="button"
         variant="ghost"

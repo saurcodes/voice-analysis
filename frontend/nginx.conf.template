@@ -15,11 +15,18 @@ map $request_uri $log_uri {
 }
 
 log_format scrubbed '$remote_addr - $remote_user [$time_local] "$request_method $log_uri $server_protocol" $status $body_bytes_sent';
-access_log /dev/stdout scrubbed;
 
 server {
     listen 80;
     root /usr/share/nginx/html;
+
+    # access_log directives accumulate across levels (unlike add_header's "closest one wins"):
+    # the base image's main nginx.conf already sets an http-level access_log using its default
+    # "main" format. Setting access_log here at the template's top level (http context) would
+    # ADD to that default, logging every request twice: once scrubbed, once with the Drive
+    # callback's query string (and its auth code) intact. Setting it inside this server block
+    # instead overrides the inherited http-level one, so only the scrubbed line is written.
+    access_log /dev/stdout scrubbed;
 
     # Security headers applied to every response. ${KEYCLOAK_URL} is substituted by
     # docker-entrypoint.sh (envsubst) from the container's KEYCLOAK_URL env var, so the CSP

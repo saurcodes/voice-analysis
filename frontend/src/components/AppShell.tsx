@@ -105,12 +105,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="hidden md:block">
               <ThemeToggle />
             </div>
-            {/* The user's name is UserMenu's own first child; hiding it below md without
-                editing that component (owned elsewhere) keeps the sign-out icon visible while
-                freeing up room in the narrow header. */}
-            <div className="[&>div>span]:hidden md:[&>div>span]:inline-block">
-              <UserMenu />
-            </div>
+            <UserMenu />
           </div>
         </div>
       </header>
