@@ -7,3 +7,6 @@ backend/*.egg-info/
 frontend/node_modules/
 frontend/dist/
 backend/data/
+frontend/test-results/
+frontend/playwright-report/
+frontend/e2e/.auth/
