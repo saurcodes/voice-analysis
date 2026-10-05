@@ -17,17 +17,14 @@ type TranscriptWord = components["schemas"]["TranscriptWord"];
 type TranscriptSegment = components["schemas"]["TranscriptSegment"];
 type DriveFileOut = components["schemas"]["DriveFileOut"];
 
-/** DriveFileOut plus the `is_folder` flag the backend's Drive listing hardening adds; replace
- * with the generated type once `npm run gen:api` picks up the updated openapi.json. */
-export type DriveFileWithFolder = DriveFileOut & { is_folder?: boolean };
-
-export function driveFile(overrides: Partial<DriveFileWithFolder> = {}): DriveFileWithFolder {
+export function driveFile(overrides: Partial<DriveFileOut> = {}): DriveFileOut {
   return {
     id: "drive-file-0001",
     name: "pitch-practice.m4a",
     mime_type: "audio/mp4",
     modified_time: "2026-09-30T09:15:00Z",
     size: 2_400_000,
+    is_folder: false,
     ...overrides,
   };
 }
@@ -437,6 +434,7 @@ export function comparison(): ComparisonResult {
   return {
     analysis_ids: ids,
     recorded_at: recordedAt,
+    file_names: ["practice-run.wav", "practice-run.wav"],
     config_mismatch: false,
     analyser_version_mismatch: true,
     rows: [

@@ -15,11 +15,6 @@ import { cn } from "@/lib/utils";
 
 type DriveFileOut = components["schemas"]["DriveFileOut"];
 
-/** DriveFileOut plus the folder flag the backend's Drive listing hardening adds
- * (`is_folder`, `size: null` for folders); replace with the generated type once
- * `npm run gen:api` picks up the updated openapi.json. */
-type DriveFileWithFolder = DriveFileOut & { is_folder?: boolean };
-
 interface Crumb {
   id: string;
   name: string;
@@ -72,7 +67,7 @@ export function DriveBrowser({ selected, onChange, enabled = true }: DriveBrowse
   const filesQuery = useDriveFiles(activeFolder || "root", { enabled });
 
   const selectedIds = new Set(selected.map((file) => file.id));
-  const files = (filesQuery.data ?? []) as DriveFileWithFolder[];
+  const files: DriveFileOut[] = filesQuery.data ?? [];
   // Folders first, so the browsable structure reads before the selectable files.
   const orderedFiles = [...files.filter((f) => f.is_folder), ...files.filter((f) => !f.is_folder)];
 
@@ -83,7 +78,7 @@ export function DriveBrowser({ selected, onChange, enabled = true }: DriveBrowse
     setBreadcrumb(id ? [ROOT_CRUMB, { id, name: id }] : [ROOT_CRUMB]);
   }
 
-  function navigateIntoFolder(folder: DriveFileWithFolder) {
+  function navigateIntoFolder(folder: DriveFileOut) {
     setBreadcrumb((prev) => [...prev, { id: folder.id, name: folder.name }]);
     setFolderInput("");
   }

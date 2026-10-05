@@ -1,7 +1,6 @@
 import { Link, useSearchParams } from "react-router";
 import { ApiError } from "@/api/client";
 import { useComparison, useSummaries } from "@/api/hooks";
-import type { components } from "@/api/types";
 import { AppShell } from "@/components/AppShell";
 import { ComparisonTable } from "@/components/compare/ComparisonTable";
 import { MismatchBanners } from "@/components/compare/MismatchBanners";
@@ -10,13 +9,6 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { chartSlots } from "@/lib/compare";
 import { formatDateTime } from "@/lib/dates";
-
-type ComparisonResult = components["schemas"]["ComparisonResult"];
-
-/** ComparisonResult plus the `file_names` field the comparison hardening adds server-side
- * (one entry per analysis_ids slot, null when that recording's own file name is unknown);
- * replace with the generated type once `npm run gen:api` picks up the updated openapi.json. */
-type ComparisonResultWithNames = ComparisonResult & { file_names?: Array<string | null> };
 
 function errorDetail(error: unknown): string {
   if (error instanceof ApiError && typeof error.detail === "string") return error.detail;
@@ -123,7 +115,7 @@ export function ComparePage() {
   // even for an analysis the summaries page below doesn't have loaded), falling back to the
   // summaries lookup above, and finally the id prefix; a null slot (unknown file name) also
   // falls through to the summaries lookup rather than rendering as a blank name.
-  const comparisonFileNames = (comparison as ComparisonResultWithNames).file_names;
+  const comparisonFileNames = comparison.file_names;
   comparison.analysis_ids.forEach((id, i) => {
     const fileName = comparisonFileNames?.[i];
     if (fileName) namesById[id] = fileName;
