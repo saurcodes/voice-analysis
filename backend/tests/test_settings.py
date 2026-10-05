@@ -32,3 +32,29 @@ def test_settings_from_env(monkeypatch):
     assert s.job_workers == 3 and str(s.data_dir) == "/srv/data"
     monkeypatch.setenv("KEYCLOAK_JWKS_URL_OVERRIDE", "http://keycloak:8080/realms/x/protocol/openid-connect/certs")
     assert get_settings().jwks_url == "http://keycloak:8080/realms/x/protocol/openid-connect/certs"
+
+
+def test_drive_configured_false_by_default(monkeypatch):
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DRIVE_TOKEN_KEY", raising=False)
+    s = Settings(_env_file=None)
+    assert s.secret_key == "dev-secret-change-me"
+    assert s.google_redirect_uri == "http://localhost:8000/api/drive/callback"
+    assert s.drive_configured is False
+
+
+def test_drive_configured_true_when_all_three_set(monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "client-id")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("DRIVE_TOKEN_KEY", "token-key")
+    s = get_settings()
+    assert s.drive_configured is True
+
+
+def test_drive_configured_false_when_only_some_set(monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "client-id")
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DRIVE_TOKEN_KEY", raising=False)
+    s = get_settings()
+    assert s.drive_configured is False

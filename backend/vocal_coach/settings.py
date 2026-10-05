@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # In compose the backend container cannot reach a host-run Ollama at localhost; this override
     # points the LLM provider's base_url elsewhere (e.g. http://host.docker.internal:11434/v1).
     llm_base_url_override: str | None = None
+    secret_key: str = "dev-secret-change-me"
+    drive_token_key: str | None = None
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    google_redirect_uri: str = "http://localhost:8000/api/drive/callback"
 
     @property
     def jwks_url(self) -> str:
@@ -36,6 +41,10 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * BYTES_PER_MB
+
+    @property
+    def drive_configured(self) -> bool:
+        return bool(self.google_client_id and self.google_client_secret and self.drive_token_key)
 
 
 def get_settings() -> Settings:

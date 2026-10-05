@@ -27,6 +27,7 @@ httpx2==2.13.1
 huggingface_hub==1.33.0
 idna==3.20
 iniconfig==2.3.0
+itsdangerous==2.2.0
 jiter==0.17.0
 Mako==1.4.3
 MarkupSafe==3.0.4

@@ -13,7 +13,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from vocal_coach.storage.models import JOB_STATUSES, Analysis, Job, User
+from vocal_coach.storage.models import JOB_STATUSES, Analysis, DriveConnection, Job, User, utcnow
 
 JOB_UPDATABLE = frozenset({"status", "stage", "progress_pct", "error", "analysis_id"})
 STALE_STATUSES = ("queued", "running")  # a restart means these can never finish
@@ -53,6 +53,36 @@ def upsert_user(session: Session, keycloak_sub: str, email: str | None, username
     user.username = username
     _commit(session)
     return user
+
+
+def get_drive_connection(session: Session, user_id: uuid.UUID) -> DriveConnection | None:
+    # populate_existing: a refresh-then-retry path and the caller that just upserted must see the latest row.
+    return session.scalar(
+        select(DriveConnection).where(DriveConnection.user_id == user_id).execution_options(populate_existing=True)
+    )
+
+
+def upsert_drive_connection(
+    session: Session, user_id: uuid.UUID, *, encrypted_refresh_token: bytes, google_email: str | None,
+) -> DriveConnection:
+    """Link (or re-link) this user's Drive. A re-link replaces the token and email and resets
+    `connected_at` to now, since a new refresh token means a new consent grant."""
+    row = session.get(DriveConnection, user_id, populate_existing=True)
+    if row is None:
+        row = DriveConnection(user_id=user_id, encrypted_refresh_token=encrypted_refresh_token, google_email=google_email)
+        session.add(row)
+    else:
+        row.encrypted_refresh_token = encrypted_refresh_token
+        row.google_email = google_email
+        row.connected_at = utcnow()
+    _commit(session)
+    return row
+
+
+def delete_drive_connection(session: Session, user_id: uuid.UUID) -> bool:
+    result = session.execute(delete(DriveConnection).where(DriveConnection.user_id == user_id))
+    _commit(session)
+    return result.rowcount == ROWS_PER_ID
 
 
 def find_analysis(

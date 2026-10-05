@@ -362,6 +362,31 @@ def test_set_speaker_context_is_scoped(session):
     assert repo.set_speaker_context(session, u.id, a.id, "board update").speaker_context == "board update"
 
 
+def test_drive_connection_upsert_get_delete_and_scoping(session):
+    u = repo.upsert_user(session, "a", None, None)
+    other = repo.upsert_user(session, "b", None, None)
+    assert repo.get_drive_connection(session, u.id) is None
+
+    row = repo.upsert_drive_connection(session, u.id, encrypted_refresh_token=b"blob-1", google_email="a@x.test")
+    fetched = repo.get_drive_connection(session, u.id)
+    assert fetched.encrypted_refresh_token == b"blob-1" and fetched.google_email == "a@x.test"
+    first_connected_at = fetched.connected_at
+
+    # another user's connection is never visible
+    assert repo.get_drive_connection(session, other.id) is None
+
+    # re-link replaces the token and email and resets connected_at
+    relinked = repo.upsert_drive_connection(session, u.id, encrypted_refresh_token=b"blob-2", google_email="new@x.test")
+    assert relinked.user_id == row.user_id
+    again = repo.get_drive_connection(session, u.id)
+    assert again.encrypted_refresh_token == b"blob-2" and again.google_email == "new@x.test"
+    assert again.connected_at >= first_connected_at
+
+    assert repo.delete_drive_connection(session, u.id) is True
+    assert repo.get_drive_connection(session, u.id) is None
+    assert repo.delete_drive_connection(session, u.id) is False
+
+
 def test_list_jobs_filters_and_limits(session):
     u = repo.upsert_user(session, "a", None, None)
     jobs = [repo.create_job(session, u.id, file_name=f"{i}.wav") for i in range(3)]
