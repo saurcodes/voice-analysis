@@ -1,12 +1,19 @@
+# Secrets and runtime data
 .env
 data/
+backend/data/
+# Python
 backend/.venv/
 backend/**/__pycache__/
 backend/.pytest_cache/
 backend/*.egg-info/
+# Node and frontend build output
 frontend/node_modules/
 frontend/dist/
-backend/data/
+# Playwright output and saved auth state
 frontend/test-results/
 frontend/playwright-report/
 frontend/e2e/.auth/
+# Local tool state (plan ledgers, browser automation)
+.superpowers/
+.playwright-mcp/

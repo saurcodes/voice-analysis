@@ -1,5 +1,7 @@
 # Vocal Coach — backend
 
+Setup, configuration, running the stack and the test commands live in the root [README](../README.md). This file is the backend module reference: what each package does, its rules and its endpoints, in the order the plans built them.
+
 ## Analysis core (Plan 1)
 
 Deterministic voice metrics from any audio/video file. Same file + same `config.yaml` → byte-identical `metrics.json`.
@@ -68,7 +70,7 @@ export DATABASE_URL=postgresql+psycopg://vocal:vocal@localhost:5432/vocal_coach
 alembic upgrade head          # or: python -c "from vocal_coach.storage.migrate import upgrade_to_head as u; import os; u(os.environ['DATABASE_URL'])"
 ```
 
-The migration URL is taken from `-x url=…`, then the programmatic `upgrade_to_head(url)` argument, then `DATABASE_URL`, then settings (`.env`), then `alembic.ini`. Run migrations once at startup from a single process (the compose entrypoint), not from every worker; `fail_stale_jobs` assumes a single backend process, and running it from several processes would fail jobs another process is still running.
+The migration URL is taken from `-x url=<url>`, then the programmatic `upgrade_to_head(url)` argument, then `DATABASE_URL`, then settings (`.env`), then `alembic.ini`. Run migrations once at startup from a single process (the compose entrypoint), not from every worker; `fail_stale_jobs` assumes a single backend process, and running it from several processes would fail jobs another process is still running.
 
 **Summaries vs full rows.** `repo.list_analysis_summaries(user_id, limit=, offset=)` backs the analyses list: one query of scalar columns plus a few headline metrics extracted in SQL (JSON paths), with `has_transcript` / `has_coaching` flags; it never loads the metrics/transcript/coaching blobs. Load full rows only where they are shown or compared: `repo.get_analysis` for one, `repo.get_analyses(user_id, ids)` for a comparison (one scoped query, unknown or foreign ids dropped). For job progress, an SSE handler should open one short session per poll (or rely on `get_job`, which refreshes the row via `populate_existing`), never hold one session open for the whole stream.
 
@@ -118,7 +120,7 @@ Endpoints: see `/docs`. Drive (`/api/drive/*`, `source: "drive"`) is described u
 
 Jobs: `GET /api/jobs?status=` lists jobs newest first; `POST /api/jobs/{id}/retry` re-runs a finished job's upload (410
 once the upload has been cleaned up, and 410 for a Drive-sourced job, which is analysed again from the Drive tab). A worker process that dies (OOM kill, segfault) fails its job with
-`worker crashed: …` and the pool is rebuilt; if that fails the upload answers 503. Uploads live in
+`worker crashed: <reason>` and the pool is rebuilt; if that fails the upload answers 503. Uploads live in
 `DATA_DIR/uploads/<user>/<source_sha256>.<ext>` and are deleted once no analysis and no unfinished job references them
 (after the last analysis is deleted, or after a pipeline failure).
 

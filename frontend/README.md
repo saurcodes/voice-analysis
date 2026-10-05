@@ -1,5 +1,7 @@
 # Vocal Coach frontend
 
+Setup, configuration, running the stack and the test commands (including `npm run e2e`) live in the root [README](../README.md). This file is the frontend module reference: dev loop details, design tokens, the API and SSE clients, and the nginx image.
+
 Vite + React + TypeScript app: upload recordings, watch job progress live, browse the Library,
 read one analysis, compare recordings, manage account settings. Served in production by nginx
 (see "Production build and compose service" below).
