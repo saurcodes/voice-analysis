@@ -8,23 +8,29 @@ true incremental/streaming multipart parsing — that's follow-up hardening (led
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import Response as RawResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from vocal_coach.analysis.schema import MetricsReport
 from vocal_coach.auth.deps import CurrentUser, get_current_user, get_session
+from vocal_coach.api.drive import drive_http_error
 from vocal_coach.api.jobs import submit_or_503
-from vocal_coach.drive.client import MEDIA_EXTENSIONS as ALLOWED_EXTENSIONS
+from vocal_coach.drive import cache as drive_cache
+from vocal_coach.drive import service as drive_service
+from vocal_coach.drive.client import DriveClient, DriveFile, MEDIA_EXTENSIONS as ALLOWED_EXTENSIONS
+from vocal_coach.drive.errors import DriveError
 from vocal_coach.pipeline import JobRequest
 from vocal_coach.storage import paths, repo
 from vocal_coach.storage.repo import AnalysisSummary
@@ -42,6 +48,18 @@ SPEAKER_CONTEXT_MAX_CHARS = 2000  # also the CoachRequest limit (api/llm.py); it
 
 class JobIds(BaseModel):
     job_ids: list[uuid.UUID]
+
+
+class LlmOptions(BaseModel):
+    enabled: bool = False
+    model: str | None = None
+
+
+class DriveAnalysisRequest(BaseModel):
+    source: Literal["drive"]
+    file_ids: list[str] = Field(min_length=1, max_length=20)
+    speaker_context: str | None = Field(default=None, max_length=SPEAKER_CONTEXT_MAX_CHARS)
+    llm: LlmOptions = Field(default_factory=LlmOptions)
 
 
 class AnalysisDetail(BaseModel):
@@ -138,26 +156,71 @@ async def _store_upload(file: UploadFile, data_dir: Path, user_id: uuid.UUID, ma
     return final, sha, size
 
 
-# The route reads the multipart form itself (so it can 413 before parsing and 501 on JSON), which hides
-# the body from FastAPI's schema generation; declare it here so generated clients see the real contract.
+# The route reads the body itself (multipart so it can 413 before parsing, or raw JSON for the Drive
+# branch), which hides it from FastAPI's schema generation; declare it here so generated clients see
+# the real contract.
 UPLOAD_OPENAPI = {
-    "requestBody": {"required": True, "content": {"multipart/form-data": {"schema": {
-        "type": "object", "required": ["file"],
-        "properties": {
-            "file": {"type": "string", "format": "binary"},
-            "speaker_context": {"type": "string", "maxLength": SPEAKER_CONTEXT_MAX_CHARS},
-            "llm_enabled": {"type": "boolean"},
-            "llm_model": {"type": "string"},
-            "recorded_at": {"type": "string", "format": "date-time"},
-        },
-    }}}},
+    "requestBody": {"required": True, "content": {
+        "multipart/form-data": {"schema": {
+            "type": "object", "required": ["file"],
+            "properties": {
+                "file": {"type": "string", "format": "binary"},
+                "speaker_context": {"type": "string", "maxLength": SPEAKER_CONTEXT_MAX_CHARS},
+                "llm_enabled": {"type": "boolean"},
+                "llm_model": {"type": "string"},
+                "recorded_at": {"type": "string", "format": "date-time"},
+            },
+        }},
+        "application/json": {"schema": DriveAnalysisRequest.model_json_schema()},
+    }},
     "responses": {
+        "404": {"description": "drive file not found"},
+        "409": {"description": "drive_not_connected"},
         "413": {"description": "file too large"},
         "415": {"description": "unsupported file type"},
-        "501": {"description": "Drive source not available yet"},
         "503": {"description": "job runner unavailable"},
     },
 }
+
+
+async def _create_drive_analyses(request: Request, user: CurrentUser, session: Session) -> JobIds:
+    """JSON branch of `POST /analyses`: one job per Drive file id, metadata fetched up front so a
+    file the user cannot read aborts the whole request before any job is created."""
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid JSON body")
+    try:
+        body = DriveAnalysisRequest.model_validate(payload)
+    except ValidationError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from None
+
+    settings = request.app.state.settings
+    try:
+        token = await asyncio.to_thread(drive_service.access_token_for, session, settings, user.id)
+    except DriveError as e:
+        raise drive_http_error(e) from None
+    client = DriveClient(token)
+
+    files: list[DriveFile] = []
+    for file_id in body.file_ids:
+        try:
+            files.append(await asyncio.to_thread(client.get_file, file_id))
+        except DriveError as e:
+            raise drive_http_error(e) from None
+
+    job_ids: list[uuid.UUID] = []
+    for file in files:
+        recorded_at = datetime.fromisoformat(file.modified_time.replace("Z", "+00:00"))
+        path = drive_cache.cache_path(settings.data_dir, user.id, file)
+        job = repo.create_job(session, user.id, file_name=file.name, source_sha256=None, recorded_at=recorded_at)
+        req = JobRequest(job_id=job.id, user_id=user.id, source_path=path, file_name=file.name,
+                         recorded_at=recorded_at, drive_file_id=file.id, drive_modified_time=file.modified_time,
+                         speaker_context=body.speaker_context, llm_enabled=body.llm.enabled,
+                         llm_model=body.llm.model, source_sha256=None)
+        submit_or_503(request, session, job.id, req)
+        job_ids.append(job.id)
+    return JobIds(job_ids=job_ids)
 
 
 @router.post("/analyses", status_code=status.HTTP_202_ACCEPTED, response_model=JobIds, openapi_extra=UPLOAD_OPENAPI)
@@ -168,8 +231,7 @@ async def create_analysis(
 ):
     content_type = request.headers.get("content-type", "")
     if content_type.startswith("application/json"):
-        # JSON body (Drive source) — Plan 7
-        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "drive is not available yet")
+        return await _create_drive_analyses(request, user, session)
     _reject_if_declared_too_large(request, request.app.state.settings.max_upload_bytes)
     async with request.form() as form:  # closes the UploadFile's spooled temp file on exit, even on error
         file = form.get("file")
@@ -237,6 +299,8 @@ def delete_analysis(analysis_id: uuid.UUID, request: Request, user: CurrentUser 
         raise HTTPException(404, "analysis not found")
     source_sha = row.source_sha256  # the upload's name; content_sha256 is the extracted WAV's hash
     repo.delete_analysis(session, user.id, analysis_id)
+    # Drive-sourced analyses have no source_sha256; the cached download is left in place here
+    # (bounded by Plan 8's cache cleanup), not removed on delete.
     if source_sha and not repo.count_source_refs(session, user.id, source_sha):
         paths.remove_upload(request.app.state.settings.data_dir, user.id, source_sha)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

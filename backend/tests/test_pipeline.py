@@ -8,6 +8,7 @@ from tests import synth
 from tests.conftest import requires_ffmpeg
 from tests.fake_llm import FakeProvider
 from tests.fake_whisper import FakeWhisper, seg, word
+from vocal_coach.drive.errors import DriveNotConnected, DriveNotFound
 from vocal_coach.llm.base import LLMError
 from vocal_coach.pipeline import STAGES, JobRequest, run_pipeline
 from vocal_coach.settings import Settings
@@ -45,6 +46,21 @@ def _req(session, tmp_path, name="r.wav"):
     src = synth.write_wav(tmp_path / name, _speech())
     return JobRequest(job_id=job.id, user_id=user.id, source_path=src, file_name=name,
                       recorded_at=datetime(2026, 10, 1, tzinfo=timezone.utc)), user
+
+
+def _drive_req(session, tmp_path, *, cached: bool = False):
+    """A Drive-sourced JobRequest. `source_path` is the cache path; it is pre-populated with real
+    audio when `cached` so the download stage should treat it as a hit and skip the downloader."""
+    user = repo.upsert_user(session, "sub", None, None)
+    job = repo.create_job(session, user.id)
+    dest = tmp_path / "cache" / "file-1__2026-10-04T10-42-00.000Z.wav"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if cached:
+        synth.write_wav(dest, _speech())
+    req = JobRequest(job_id=job.id, user_id=user.id, source_path=dest, file_name="take.wav",
+                     recorded_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                     drive_file_id="file-1", drive_modified_time="2026-10-04T10:42:00.000Z")
+    return req, user
 
 
 @requires_ffmpeg
@@ -240,3 +256,67 @@ def test_pipeline_dedupe_coach_stage_exception_still_reaches_done(cfg, session, 
     assert second == first
     assert seen[-1] == ("done", 100)
     assert any(str(job2.id) in r.getMessage() for r in caplog.records)
+
+
+@requires_ffmpeg
+def test_pipeline_downloads_drive_file_when_not_cached(cfg, session, tmp_path: Path):
+    req, user = _drive_req(session, tmp_path, cached=False)
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+    calls: list[tuple] = []
+
+    def fake_downloader(sess, s, user_id, file_id, modified_time, dest):
+        calls.append((sess, s, user_id, file_id, modified_time, dest))
+        synth.write_wav(dest, _speech())
+        return dest
+
+    seen: list[tuple[str, int]] = []
+    analysis_id = run_pipeline(req, cfg, settings, session, lambda s, p: seen.append((s, p)),
+                               whisper_model=_fake(), drive_downloader=fake_downloader)
+
+    assert [s for s, _ in seen] == list(STAGES)  # stage sequence unchanged
+    assert len(calls) == 1
+    assert calls[0][2:5] == (user.id, "file-1", "2026-10-04T10:42:00.000Z")
+    assert calls[0][5] == req.source_path
+    row = repo.get_analysis(session, user.id, analysis_id)
+    assert row.drive_file_id == "file-1"
+
+
+@requires_ffmpeg
+def test_pipeline_cache_hit_skips_the_drive_downloader(cfg, session, tmp_path: Path):
+    req, user = _drive_req(session, tmp_path, cached=True)
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+
+    def downloader_must_not_be_called(*_a, **_k):
+        raise AssertionError("the downloader must not be called on a cache hit")
+
+    analysis_id = run_pipeline(req, cfg, settings, session, lambda s, p: None, whisper_model=_fake(),
+                               drive_downloader=downloader_must_not_be_called)
+
+    row = repo.get_analysis(session, user.id, analysis_id)
+    assert row is not None and row.drive_file_id == "file-1"
+
+
+def test_pipeline_drive_not_connected_gives_reconnect_message(cfg, session, tmp_path: Path):
+    req, user = _drive_req(session, tmp_path, cached=False)
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+
+    def failing_downloader(*_a, **_k):
+        raise DriveNotConnected("drive_not_connected")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        run_pipeline(req, cfg, settings, session, lambda s, p: None, whisper_model=_fake(),
+                     drive_downloader=failing_downloader)
+    assert "reconnect it in Settings" in str(exc_info.value)
+
+
+def test_pipeline_drive_not_found_names_the_file(cfg, session, tmp_path: Path):
+    req, user = _drive_req(session, tmp_path, cached=False)
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+
+    def failing_downloader(*_a, **_k):
+        raise DriveNotFound("drive file file-1 not found")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        run_pipeline(req, cfg, settings, session, lambda s, p: None, whisper_model=_fake(),
+                     drive_downloader=failing_downloader)
+    assert str(exc_info.value) == "Drive file take.wav was not found"

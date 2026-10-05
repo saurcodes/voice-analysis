@@ -25,6 +25,8 @@ from vocal_coach.analysis.schema import SourceInfo
 from vocal_coach.analysis.serialise import to_canonical_json
 from vocal_coach.analysis.tracks import extract_tracks
 from vocal_coach.config import AppConfig, config_hash
+from vocal_coach.drive import service as drive_service
+from vocal_coach.drive.errors import DriveError, DriveNotConnected, DriveNotFound
 from vocal_coach.llm.base import LLMProvider
 from vocal_coach.llm.service import DISABLED, coach_analysis
 from vocal_coach.settings import Settings
@@ -82,11 +84,22 @@ def _coach_stage(
 def run_pipeline(
     req: JobRequest, cfg: AppConfig, settings: Settings, session: Session, progress: Progress,
     *, whisper_model: WhisperLike | None = None, llm_provider: LLMProvider | None = None,
+    drive_downloader: Callable[..., Path] | None = None,
 ) -> uuid.UUID:
+    downloader = drive_downloader if drive_downloader is not None else drive_service.download_for_job
     work = settings.data_dir / WORK_SUBDIR / str(req.job_id)
     work.mkdir(parents=True, exist_ok=True)
     try:
-        progress("download", STAGE_PROGRESS["download"])  # source is already local (upload); Drive arrives in Plan 7
+        progress("download", STAGE_PROGRESS["download"])  # source is local (upload) already, or fetched below (Drive)
+        if req.drive_file_id and not (req.source_path.exists() and req.source_path.stat().st_size > 0):
+            try:
+                downloader(session, settings, req.user_id, req.drive_file_id, req.drive_modified_time or "", req.source_path)
+            except DriveNotConnected as e:
+                raise RuntimeError("Google Drive is no longer connected; reconnect it in Settings and retry") from e
+            except DriveNotFound as e:
+                raise RuntimeError(f"Drive file {req.file_name} was not found") from e
+            except DriveError as e:
+                raise RuntimeError("could not download from Google Drive") from e
         wav = work / (Path(req.file_name).stem + ".wav")
         try:
             info = extract_wav(req.source_path, wav)

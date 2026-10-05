@@ -66,7 +66,8 @@ def test_openapi_documents_the_contract_plan5_needs(tmp_path):
         form = upload["requestBody"]["content"]["multipart/form-data"]["schema"]
         assert form["required"] == ["file"] and form["properties"]["file"] == {"type": "string", "format": "binary"}
         assert form["properties"]["recorded_at"]["format"] == "date-time"
-        assert {"202", "501"} <= set(upload["responses"])
+        assert {"202", "404", "409"} <= set(upload["responses"])
+        assert "application/json" in upload["requestBody"]["content"]
         schemas = spec["components"]["schemas"]
         for name in ("MetricsReport", "Transcript", "PublicConfig", "LlmModels", "ComparisonResult",
                      "AnalysisSummary", "JobStatus", "AnalysisDetail"):

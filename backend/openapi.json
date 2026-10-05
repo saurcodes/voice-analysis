@@ -2259,6 +2259,71 @@
         "operationId": "create_analysis_api_analyses_post",
         "requestBody": {
           "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "LlmOptions": {
+                    "properties": {
+                      "enabled": {
+                        "default": false,
+                        "title": "Enabled",
+                        "type": "boolean"
+                      },
+                      "model": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "title": "Model"
+                      }
+                    },
+                    "title": "LlmOptions",
+                    "type": "object"
+                  }
+                },
+                "properties": {
+                  "file_ids": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 20,
+                    "minItems": 1,
+                    "title": "File Ids",
+                    "type": "array"
+                  },
+                  "llm": {
+                    "$ref": "#/$defs/LlmOptions"
+                  },
+                  "source": {
+                    "const": "drive",
+                    "title": "Source",
+                    "type": "string"
+                  },
+                  "speaker_context": {
+                    "anyOf": [
+                      {
+                        "maxLength": 2000,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Speaker Context"
+                  }
+                },
+                "required": [
+                  "source",
+                  "file_ids"
+                ],
+                "title": "DriveAnalysisRequest",
+                "type": "object"
+              }
+            },
             "multipart/form-data": {
               "schema": {
                 "properties": {
@@ -2301,14 +2366,17 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "description": "drive file not found"
+          },
+          "409": {
+            "description": "drive_not_connected"
+          },
           "413": {
             "description": "file too large"
           },
           "415": {
             "description": "unsupported file type"
-          },
-          "501": {
-            "description": "Drive source not available yet"
           },
           "503": {
             "description": "job runner unavailable"

@@ -3,6 +3,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -12,8 +13,52 @@ from tests import synth
 from tests.api_fixtures import fake_metrics, fake_transcript, make_test_app
 from tests.conftest import requires_ffmpeg
 from vocal_coach.api.analyses import _download_filename, _reject_if_declared_too_large
+from vocal_coach.drive import crypto, oauth
+from vocal_coach.drive.client import DRIVE_API
 from vocal_coach.storage import repo
 from vocal_coach.storage.db import make_engine, make_session_factory
+
+DRIVE_GET_FIELDS = "id,name,mimeType,modifiedTime,size"
+
+
+def _drive_overrides(**extra) -> dict:
+    return {
+        "google_client_id": "cid",
+        "google_client_secret": "sec",
+        "google_redirect_uri": "http://localhost:8000/api/drive/callback",
+        "drive_token_key": crypto.generate_key(),
+        "secret_key": "s",
+        **extra,
+    }
+
+
+def _connect_drive(ctx, sub="user-1", email="singer@example.com"):
+    """Stores a Drive connection directly (bypassing the OAuth consent flow), returning the user id."""
+    with ctx["session_factory"]() as session:
+        user = repo.upsert_user(session, sub, None, None)
+        encrypted = crypto.encrypt_token(ctx["settings"].drive_token_key, "1//refresh")
+        repo.upsert_drive_connection(session, user.id, encrypted_refresh_token=encrypted, google_email=email)
+        return user.id
+
+
+def _mock_get_file(httpx_mock, file_id, *, name, modified_time, mime_type="audio/wav", size="10", status_code=200):
+    url = httpx.URL(f"{DRIVE_API}/{file_id}", params={"fields": DRIVE_GET_FIELDS})
+    if status_code != 200:
+        httpx_mock.add_response(url=url, status_code=status_code)
+        return
+    httpx_mock.add_response(url=url, json={
+        "id": file_id, "name": name, "mimeType": mime_type, "modifiedTime": modified_time, "size": size,
+    })
+
+
+def _capturing_job_fn(captured):
+    def job_fn(req, database_url, config_path):
+        captured.append(req)
+        engine = make_engine(database_url)
+        with make_session_factory(engine)() as s:
+            repo.update_job(s, req.job_id, status="done", stage="done", progress_pct=100)
+        engine.dispose()
+    return job_fn
 
 
 def fake_job_fn(req, database_url, config_path):
@@ -121,8 +166,101 @@ def test_upload_validation(tmp_path):
         assert r.status_code == 413
         assert not list((tmp_path / "data" / "uploads").rglob("*"))  # partial upload removed
         r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": ["x"]})
-        assert r.status_code == 501
+        assert r.status_code == 409
+        assert r.json()["detail"] == "drive_not_connected"
         assert client.post("/api/analyses", files={"file": ("a.wav", b"x", "audio/wav")}).status_code == 401
+
+
+def test_drive_json_post_creates_one_job_per_file_in_order(tmp_path, httpx_mock):
+    captured = []
+    app, ctx = make_test_app(tmp_path, job_fn=_capturing_job_fn(captured), settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        user_id = _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "listing-tok"})
+        _mock_get_file(httpx_mock, "f1", name="one.wav", modified_time="2026-10-01T00:00:00.000Z")
+        _mock_get_file(httpx_mock, "f2", name="two.m4a", modified_time="2026-10-02T00:00:00.000Z", mime_type="audio/mp4")
+
+        r = client.post("/api/analyses", headers=ctx["auth"](),
+                        json={"source": "drive", "file_ids": ["f1", "f2"], "speaker_context": "pitch",
+                              "llm": {"enabled": True, "model": "m1"}})
+
+        assert r.status_code == 202
+        job_ids = r.json()["job_ids"]
+        assert len(job_ids) == 2
+        assert len(captured) == 2
+
+        assert captured[0].file_name == "one.wav" and captured[1].file_name == "two.m4a"
+        assert captured[0].drive_file_id == "f1" and captured[1].drive_file_id == "f2"
+        assert captured[0].drive_modified_time == "2026-10-01T00:00:00.000Z"
+        assert captured[0].recorded_at == datetime(2026, 10, 1, tzinfo=timezone.utc)
+        assert captured[1].recorded_at == datetime(2026, 10, 2, tzinfo=timezone.utc)
+        assert captured[0].speaker_context == "pitch" and captured[1].speaker_context == "pitch"
+        assert captured[0].llm_enabled is True and captured[0].llm_model == "m1"
+        assert captured[0].source_sha256 is None
+        assert captured[0].user_id == user_id
+
+        job1 = client.get(f"/api/jobs/{job_ids[0]}", headers=ctx["auth"]()).json()
+        job2 = client.get(f"/api/jobs/{job_ids[1]}", headers=ctx["auth"]()).json()
+        assert job1["file_name"] == "one.wav" and job2["file_name"] == "two.m4a"
+
+
+def test_drive_json_post_404_aborts_with_zero_jobs(tmp_path, httpx_mock):
+    captured = []
+    app, ctx = make_test_app(tmp_path, job_fn=_capturing_job_fn(captured), settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "listing-tok"})
+        _mock_get_file(httpx_mock, "missing", name="", modified_time="", status_code=404)
+
+        r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": ["missing"]})
+
+        assert r.status_code == 404
+        assert r.json()["detail"] == "drive file missing not found"
+        assert captured == []
+        assert client.get("/api/jobs", headers=ctx["auth"]()).json() == []
+
+
+def test_drive_json_post_second_id_not_found_creates_no_jobs(tmp_path, httpx_mock):
+    """Metadata is fetched for every id before any job is created: a later id failing still leaves zero jobs."""
+    captured = []
+    app, ctx = make_test_app(tmp_path, job_fn=_capturing_job_fn(captured), settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "listing-tok"})
+        _mock_get_file(httpx_mock, "f1", name="one.wav", modified_time="2026-10-01T00:00:00.000Z")
+        _mock_get_file(httpx_mock, "missing", name="", modified_time="", status_code=404)
+
+        r = client.post("/api/analyses", headers=ctx["auth"](),
+                        json={"source": "drive", "file_ids": ["f1", "missing"]})
+
+        assert r.status_code == 404
+        assert captured == []
+        assert client.get("/api/jobs", headers=ctx["auth"]()).json() == []
+
+
+def test_drive_json_post_not_connected_is_409(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn, settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": ["f1"]})
+        assert r.status_code == 409
+        assert r.json()["detail"] == "drive_not_connected"
+
+
+def test_drive_json_post_too_many_file_ids_is_422(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn, settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        r = client.post("/api/analyses", headers=ctx["auth"](),
+                        json={"source": "drive", "file_ids": [f"f{i}" for i in range(21)]})
+        assert r.status_code == 422
+
+
+def test_drive_json_post_invalid_source_is_422(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn, settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "nope", "file_ids": ["f1"]})
+        assert r.status_code == 422
 
 
 def test_failed_job_is_visible(tmp_path):

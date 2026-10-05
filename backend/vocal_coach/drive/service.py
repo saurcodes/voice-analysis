@@ -3,6 +3,7 @@ and file listing. This is the only `vocal_coach.drive` module the API and the pi
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
@@ -73,3 +74,17 @@ def connection_status(session: Session, user_id: uuid.UUID) -> tuple[bool, str |
     if row is None:
         return False, None
     return True, row.google_email
+
+
+def download_for_job(
+    session: Session, settings: Settings, user_id: uuid.UUID, file_id: str, modified_time: str, dest: Path,
+) -> Path:
+    """Downloads a Drive file into the job's cache path, unless it is already cached (a concurrent
+    job for the same file id + modifiedTime already wrote it). Called from inside the worker, with
+    its own session/settings. Any `DriveError` subclass propagates for the pipeline to translate
+    into a user-facing message."""
+    if dest.exists() and dest.stat().st_size > 0:
+        return dest
+    token = access_token_for(session, settings, user_id)
+    DriveClient(token).download(file_id, dest)
+    return dest

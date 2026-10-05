@@ -8,6 +8,7 @@ import uuid
 
 import pytest
 
+from vocal_coach.drive import service
 from vocal_coach.drive.cache import cache_path, ensure_cached, sanitise
 from vocal_coach.drive.client import DRIVE_API, DriveClient, DriveFile
 
@@ -81,3 +82,33 @@ def test_ensure_cached_zero_byte_file_is_a_miss_and_redownloads(tmp_path, httpx_
 
     assert downloaded is True
     assert result_path.read_bytes() == b"fresh bytes"
+
+
+def test_download_for_job_hit_after_first_download_never_calls_the_client_twice(tmp_path, monkeypatch):
+    """Two jobs racing for the same cache key: the first downloads, the second finds it already
+    there. `DriveClient.download` itself writes atomically (temp file + os.replace), so the only
+    thing `download_for_job` must get right is re-checking existence before calling it at all."""
+    calls: list[str] = []
+
+    class FakeClient:
+        def __init__(self, token):
+            self.token = token
+
+        def download(self, file_id, dest):
+            assert not calls  # a second real download would mean the cache check was skipped
+            calls.append(file_id)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"downloaded once")
+            return dest
+
+    monkeypatch.setattr(service, "access_token_for", lambda *a, **k: "tok")
+    monkeypatch.setattr(service, "DriveClient", FakeClient)
+
+    dest = tmp_path / "cache" / str(USER_ID) / "file-1__mt.m4a"
+
+    first = service.download_for_job(None, None, USER_ID, "file-1", "2026-10-04T10:42:00.000Z", dest)
+    second = service.download_for_job(None, None, USER_ID, "file-1", "2026-10-04T10:42:00.000Z", dest)
+
+    assert first == dest and second == dest
+    assert calls == ["file-1"]
+    assert dest.read_bytes() == b"downloaded once"
