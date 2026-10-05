@@ -208,8 +208,8 @@ All keys are read from `.env` by `docker compose` (variable substitution) and, f
 | `GOOGLE_CLIENT_SECRET` | empty | backend | Secret for the client above. |
 | `GOOGLE_REDIRECT_URI` | compose: `http://localhost:3000/api/drive/callback`; bare: `http://localhost:8000/api/drive/callback` | backend | Must match the Google Cloud Console entry exactly. |
 | `KEYCLOAK_URL` | `http://localhost:8080` | frontend container | Written into the runtime `/config.json` and the CSP at container start. |
-| `KEYCLOAK_REALM` | `vocal-coach` | frontend container | Same. |
-| `KEYCLOAK_CLIENT_ID` | `vocal-coach-web` | frontend container | Same. |
+| `KEYCLOAK_REALM` | `vocal-coach` | frontend container | Written into the runtime `/config.json` at container start (not the CSP). |
+| `KEYCLOAK_CLIENT_ID` | `vocal-coach-web` | frontend container | Written into the runtime `/config.json` at container start (not the CSP). |
 
 Test and script variables (not in `.env`): `TESTCONTAINERS_RYUK_DISABLED` and `VOCAL_COACH_REAL_WHISPER` (backend tests), `E2E_BASE_URL`, `E2E_USER`, `E2E_PASSWORD`, `E2E_USER_EMAIL` (Playwright), `SMOKE_NO_UP`, `SMOKE_TIMEOUT_S`, `API_URL`, `KEYCLOAK_URL`, `SMOKE_USER`, `SMOKE_PASSWORD` (`scripts/smoke.sh`).
 
