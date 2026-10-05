@@ -249,9 +249,9 @@ async def _create_drive_analyses(request: Request, user: CurrentUser, session: S
         except DriveError as e:
             raise drive_http_error(e) from None
     for file in files:  # every file is checked before any job exists, so a bad one aborts the batch
-        if file.ext not in ALLOWED_EXTENSIONS or file.size is None:
+        if file.is_folder or file.ext not in ALLOWED_EXTENSIONS or file.size is None:
             raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"unsupported file type: {file.name}")
-        if file.size > settings.max_upload_bytes:
+        if file.size > settings.drive_max_bytes:
             raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"file too large: {file.name}")
 
     if not request.app.state.runner.available():
@@ -358,9 +358,12 @@ def delete_analysis(analysis_id: uuid.UUID, request: Request, user: CurrentUser 
     if row is None:
         raise HTTPException(404, "analysis not found")
     source_sha = row.source_sha256  # the upload's name; content_sha256 is the extracted WAV's hash
+    drive_file_id = row.drive_file_id
     _deleted, refs = repo.delete_analysis_and_count_refs(session, user.id, analysis_id, source_sha)
-    # Drive-sourced analyses have no source_sha256; the cached download is left in place here
-    # (bounded by Plan 8's cache cleanup), not removed on delete.
     if source_sha and not refs:
         paths.remove_upload(request.app.state.settings.data_dir, user.id, source_sha)
+    # Drive-sourced: once no analysis of this user's references the file any more, its cached
+    # download(s) are removed too (bounded by Plan 8's cache lifecycle).
+    if drive_file_id and repo.count_drive_refs(session, user.id, drive_file_id) == 0:
+        drive_cache.remove_for_file(request.app.state.settings.data_dir, user.id, drive_file_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

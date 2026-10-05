@@ -213,6 +213,7 @@ def _jobs_for(ctx, sub="user-1"):
     ("notes.pdf", "application/pdf", "10"),
     ("Meeting notes", "application/vnd.google-apps.document", None),  # Google Doc: no extension, no size
     ("take.wav", "audio/wav", None),  # media name but Drive reports no size
+    ("Live Takes", "application/vnd.google-apps.folder", None),  # a folder id passed as a file id
 ])
 def test_drive_json_post_unsupported_file_is_415_with_zero_jobs(tmp_path, httpx_mock, name, mime_type, size):
     captured = []
@@ -474,6 +475,59 @@ def test_delete_keeps_upload_while_another_analysis_uses_it(tmp_path):
         assert len(_uploads(tmp_path)) == 1
         assert client.delete(f"/api/analyses/{second.id}", headers=ctx["auth"]()).status_code == 204
         assert _uploads(tmp_path) == []
+
+
+def fake_drive_job_fn(req, database_url, config_path):
+    """Pretend the pipeline ran for a Drive job: writes the cache file at its cache path (so cache
+    cleanup on delete has something real to remove) and stores an analysis row referencing
+    `drive_file_id` (Drive-sourced analyses carry no `source_sha256`)."""
+    import hashlib
+
+    req.source_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = f"cached:{req.drive_file_id}:{req.drive_modified_time}".encode()
+    req.source_path.write_bytes(payload)
+    engine = make_engine(database_url)
+    with make_session_factory(engine)() as s:
+        row = repo.create_analysis(
+            s, req.user_id, file_name=req.file_name, drive_file_id=req.drive_file_id,
+            content_sha256=hashlib.sha256(payload).hexdigest(), source_sha256=None,
+            recorded_at=req.recorded_at, analyser_version="0.1.0", config_hash="sha256:test",
+            metrics_json=fake_metrics(), transcript_json=fake_transcript(), speaker_context=req.speaker_context,
+        )
+        repo.update_job(s, req.job_id, status="done", stage="done", progress_pct=100, analysis_id=row.id)
+    engine.dispose()
+
+
+def test_delete_removes_cache_files_once_the_last_drive_analysis_referencing_them_is_gone(tmp_path, httpx_mock):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_drive_job_fn, settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "tok"})
+        _mock_get_file(httpx_mock, "f1", name="one.wav", modified_time="2026-10-01T00:00:00.000Z")
+
+        job_id = client.post("/api/analyses", headers=ctx["auth"](),
+                             json={"source": "drive", "file_ids": ["f1"]}).json()["job_ids"][0]
+        first = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).json()["analysis_id"]
+
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            cache_files = list((tmp_path / "data" / "cache" / str(user.id)).glob("f1__*"))
+        assert len(cache_files) == 1
+        cached = cache_files[0]
+
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            src = repo.get_analysis(s, user.id, uuid.UUID(first))
+            second = repo.create_analysis(
+                s, user.id, file_name="two.wav", drive_file_id="f1", content_sha256="0" * 64,
+                source_sha256=None, recorded_at=src.recorded_at, analyser_version="0.1.0",
+                config_hash="sha256:other", metrics_json=src.metrics_json)
+
+        assert client.delete(f"/api/analyses/{first}", headers=ctx["auth"]()).status_code == 204
+        assert cached.exists()  # another analysis still references drive_file_id f1
+
+        assert client.delete(f"/api/analyses/{second.id}", headers=ctx["auth"]()).status_code == 204
+        assert not cached.exists()
 
 
 @requires_ffmpeg

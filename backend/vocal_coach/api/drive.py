@@ -44,11 +44,12 @@ class DriveFileOut(BaseModel):
     mime_type: str
     modified_time: str
     size: int | None
+    is_folder: bool
 
 
 def _to_out(file: DriveFile) -> DriveFileOut:
     return DriveFileOut(id=file.id, name=file.name, mime_type=file.mime_type,
-                        modified_time=file.modified_time, size=file.size)
+                        modified_time=file.modified_time, size=file.size, is_folder=file.is_folder)
 
 
 def drive_http_error(e: DriveError) -> HTTPException:
@@ -169,7 +170,8 @@ async def list_files(
     if folder_id is not None and folder_id != "root" and not _DRIVE_ID_RE.fullmatch(folder_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "folder not found")
     try:
-        files = await asyncio.to_thread(service.list_files, session, settings, user.id, folder_id)
+        files = await asyncio.to_thread(
+            service.list_files, session, settings, user.id, folder_id, include_folders=True)
     except DriveError as e:
         raise drive_http_error(e) from None
     return [_to_out(f) for f in files]

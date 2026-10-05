@@ -971,6 +971,10 @@
             "title": "Id",
             "type": "string"
           },
+          "is_folder": {
+            "title": "Is Folder",
+            "type": "boolean"
+          },
           "mime_type": {
             "title": "Mime Type",
             "type": "string"
@@ -1000,7 +1004,8 @@
           "name",
           "mime_type",
           "modified_time",
-          "size"
+          "size",
+          "is_folder"
         ],
         "title": "DriveFileOut",
         "type": "object"
@@ -3136,6 +3141,9 @@
           },
           "410": {
             "description": "the uploaded file, or the Drive file, is no longer available"
+          },
+          "415": {
+            "description": "the Drive file is now a folder"
           },
           "422": {
             "content": {

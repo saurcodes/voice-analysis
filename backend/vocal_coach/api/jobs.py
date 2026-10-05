@@ -79,7 +79,11 @@ def get_job(job_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), se
 async def _retry_drive_job(request: Request, session: Session, user: CurrentUser, job) -> JobId:
     """Retry a Drive-sourced job: refetch the file's current metadata (so a changed file downloads
     again under its new `modifiedTime`) before creating the new job. The Google calls run off the
-    event loop; the old job is left `failed` either way."""
+    event loop; the old job is left `failed` either way.
+
+    `session` is only ever used sequentially here, before and after each `asyncio.to_thread` call
+    (never concurrently from two threads), so sharing the request's session across that boundary is
+    safe; the SQLite engine used in tests is also opened with `check_same_thread=False`."""
     settings = request.app.state.settings
     try:
         token = await asyncio.to_thread(drive_service.access_token_for, session, settings, user.id)
@@ -95,6 +99,8 @@ async def _retry_drive_job(request: Request, session: Session, user: CurrentUser
         raise HTTPException(status.HTTP_410_GONE, DRIVE_GONE) from None
     except DriveError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from None
+    if file.is_folder:
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"unsupported file type: {file.name}")
 
     recorded_at = datetime.fromisoformat(file.modified_time.replace("Z", "+00:00"))
     path = drive_cache.cache_path(settings.data_dir, user.id, file)
@@ -113,6 +119,7 @@ async def _retry_drive_job(request: Request, session: Session, user: CurrentUser
              responses={status.HTTP_404_NOT_FOUND: {"description": "job not found"},
                         status.HTTP_409_CONFLICT: {"description": "job is not finished, or Drive is not connected"},
                         status.HTTP_410_GONE: {"description": "the uploaded file, or the Drive file, is no longer available"},
+                        status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {"description": "the Drive file is now a folder"},
                         status.HTTP_502_BAD_GATEWAY: {"description": "Google Drive returned an error"},
                         status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "job runner unavailable, or Drive is not configured"}})
 async def retry_job(job_id: uuid.UUID, request: Request, user: CurrentUser = Depends(get_current_user),

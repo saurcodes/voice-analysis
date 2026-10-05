@@ -206,6 +206,13 @@ def count_source_refs(session: Session, user_id: uuid.UUID, source_sha256: str) 
     return int(analyses) + int(jobs)  # COUNT(*) is never NULL
 
 
+def count_drive_refs(session: Session, user_id: uuid.UUID, drive_file_id: str) -> int:
+    """How many of the user's analyses still reference this Drive file. Zero means its cached
+    download(s) can be removed (`vocal_coach.drive.cache.remove_for_file`)."""
+    return int(session.scalar(select(func.count()).select_from(Analysis).where(
+        Analysis.user_id == user_id, Analysis.drive_file_id == drive_file_id)))
+
+
 def delete_analysis_and_count_refs(
     session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID, source_sha256: str | None,
 ) -> tuple[bool, int]:

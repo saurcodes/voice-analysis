@@ -270,8 +270,43 @@ def test_drive_files_lists_mocked_media(tmp_path, httpx_mock):
         assert r.status_code == 200
         assert r.json() == [{
             "id": "f1", "name": "take.wav", "mime_type": "audio/wav",
-            "modified_time": "2026-10-04T10:00:00.000Z", "size": 99,
+            "modified_time": "2026-10-04T10:00:00.000Z", "size": 99, "is_folder": False,
         }]
+
+
+def test_drive_files_lists_folders_first_with_is_folder_true_and_no_size(tmp_path, httpx_mock):
+    from vocal_coach.drive.client import DRIVE_API
+
+    app, ctx = make_test_app(tmp_path, settings_overrides=_overrides())
+    with TestClient(app) as client:
+        state_value = _connect_and_get_state(client, ctx)
+        _mock_google_token_and_email(httpx_mock)
+        client.get("/api/drive/callback", params={"code": "auth-code", "state": state_value})
+
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "listing-tok"})
+        httpx_mock.add_response(
+            url=httpx.URL(DRIVE_API, params={
+                "q": "'root' in parents and trashed = false",
+                "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,size)",
+                "pageSize": 200,
+            }),
+            json={"files": [
+                {"id": "f1", "name": "take.wav", "mimeType": "audio/wav",
+                 "modifiedTime": "2026-10-04T10:00:00.000Z", "size": "99"},
+                {"id": "d1", "name": "Live Takes", "mimeType": "application/vnd.google-apps.folder",
+                 "modifiedTime": "2026-10-03T10:00:00.000Z"},
+            ]},
+        )
+
+        r = client.get("/api/drive/files", headers=ctx["auth"]())
+
+        assert r.status_code == 200
+        assert r.json() == [
+            {"id": "d1", "name": "Live Takes", "mime_type": "application/vnd.google-apps.folder",
+             "modified_time": "2026-10-03T10:00:00.000Z", "size": None, "is_folder": True},
+            {"id": "f1", "name": "take.wav", "mime_type": "audio/wav",
+             "modified_time": "2026-10-04T10:00:00.000Z", "size": 99, "is_folder": False},
+        ]
 
 
 def test_drive_files_invalid_grant_is_409_and_deletes_row_and_flips_me(tmp_path, httpx_mock):

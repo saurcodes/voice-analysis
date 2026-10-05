@@ -153,6 +153,9 @@ def test_retry_of_a_drive_job_404_from_google_is_410(tmp_path, httpx_mock):
         assert r.status_code == 410
         assert r.json()["detail"] == "the Drive file is no longer available; analyse it again from the Drive tab"
         assert _job(client, ctx, job_id)["status"] == "failed"
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            assert len(repo.list_jobs(s, user.id)) == 1  # no new job row was created
 
 
 def test_retry_of_a_drive_job_when_disconnected_is_409(tmp_path, httpx_mock):
@@ -167,6 +170,27 @@ def test_retry_of_a_drive_job_when_disconnected_is_409(tmp_path, httpx_mock):
         r = client.post(f"/api/jobs/{job_id}/retry", headers=ctx["auth"]())
         assert r.status_code == 409
         assert r.json()["detail"] == "drive_not_connected"
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            assert len(repo.list_jobs(s, user.id)) == 1  # no new job row was created
+
+
+def test_retry_of_a_drive_job_that_became_a_folder_is_415(tmp_path, httpx_mock):
+    captured = []
+    app, ctx = _drive_app(tmp_path, captured)
+    with TestClient(app) as client:
+        job_id = _create_one_drive_job(client, ctx, httpx_mock=httpx_mock)
+
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "retry-tok"})
+        _mock_get_file(httpx_mock, "f1", name="Now A Folder", modified_time="2026-10-05T00:00:00.000Z",
+                       mime_type="application/vnd.google-apps.folder")
+
+        r = client.post(f"/api/jobs/{job_id}/retry", headers=ctx["auth"]())
+        assert r.status_code == 415
+        assert r.json()["detail"] == "unsupported file type: Now A Folder"
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            assert len(repo.list_jobs(s, user.id)) == 1  # no new job row was created
 
 
 def _job_fixture(client, ctx, name="clip.wav"):
