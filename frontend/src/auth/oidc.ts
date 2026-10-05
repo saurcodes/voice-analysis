@@ -21,7 +21,7 @@ function onSigninCallback(): void {
  * Builds the react-oidc-context AuthProvider config from the runtime AppConfig loaded from
  * /config.json (src/config.ts), rather than from import.meta.env.VITE_KEYCLOAK_* build-time
  * values: one built frontend image can then be redeployed against any Keycloak instance
- * (Plan 8 Task 4; see frontend/docker-entrypoint.sh).
+ * (see frontend/docker-entrypoint.sh).
  */
 export function buildOidcConfig(cfg: AppConfig): AuthProviderNoUserManagerProps {
   return {

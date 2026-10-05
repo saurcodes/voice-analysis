@@ -1,6 +1,6 @@
 /** Runtime Keycloak settings read from /config.json (see loadConfig below), replacing the
  * build-time VITE_KEYCLOAK_* variables so one built image can be redeployed against a
- * different Keycloak instance without a rebuild (Plan 8 Task 4). */
+ * different Keycloak instance without a rebuild. */
 export interface AppConfig {
   keycloakUrl: string;
   keycloakRealm: string;

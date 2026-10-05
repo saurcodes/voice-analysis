@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { useLocation } from "react-router";
 import {
-  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -81,22 +80,6 @@ export function useLlmModels({ enabled = true }: { enabled?: boolean } = {}) {
     enabled,
     staleTime: LLM_MODELS_STALE_MS,
     retry: (failureCount, error) => !(error instanceof ApiError) && failureCount < 1,
-  });
-}
-
-export interface SummariesParams {
-  limit?: number;
-  offset?: number;
-}
-
-export function useSummaries({ limit = 50, offset = 0 }: SummariesParams = {}) {
-  const api = useApi();
-  return useQuery({
-    queryKey: ["vc", "summaries", { limit, offset }] as const,
-    queryFn: () =>
-      api.get<AnalysisSummary[]>(`/api/analyses?limit=${limit}&offset=${offset}`),
-    // "Load more" changes the key; keep showing the current rows instead of a skeleton flash.
-    placeholderData: keepPreviousData,
   });
 }
 

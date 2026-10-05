@@ -60,24 +60,30 @@ export function JobsPanel({ excludeIds = [] }: { excludeIds?: string[] }) {
     void queryClient.invalidateQueries({ queryKey: ["vc", "jobs"] });
   }
 
+  // `jobId` is the row's CURRENT id as JobProgressList reports it: after a retry that's the
+  // NEW job id, not the row's key in `dismissed`/`dismissErrors` (both keyed on the original,
+  // still-failed job id from the server list). `rowKey` resolves back to that original id so
+  // the row actually disappears, and when it differs from `jobId` the old failed job is
+  // deleted too (otherwise it would be left behind on the server, listed as failed forever).
   function handleDismiss(jobId: string) {
+    const rowKey = Object.keys(retried).find((key) => retried[key] === jobId) ?? jobId;
     setDismissErrors((prev) => {
-      if (!(jobId in prev)) return prev;
+      if (!(rowKey in prev)) return prev;
       const next = { ...prev };
-      delete next[jobId];
+      delete next[rowKey];
       return next;
     });
-    setDismissed((prev) => new Set(prev).add(jobId));
-    dismissJob.mutate(jobId, {
-      onError: () => {
-        setDismissed((prev) => {
-          const next = new Set(prev);
-          next.delete(jobId);
-          return next;
-        });
-        setDismissErrors((prev) => ({ ...prev, [jobId]: "Could not dismiss this job" }));
-      },
-    });
+    setDismissed((prev) => new Set(prev).add(rowKey));
+    const rollback = () => {
+      setDismissed((prev) => {
+        const next = new Set(prev);
+        next.delete(rowKey);
+        return next;
+      });
+      setDismissErrors((prev) => ({ ...prev, [rowKey]: "Could not dismiss this job" }));
+    };
+    dismissJob.mutate(jobId, { onError: rollback });
+    if (rowKey !== jobId) dismissJob.mutate(rowKey, { onError: rollback });
   }
 
   return (

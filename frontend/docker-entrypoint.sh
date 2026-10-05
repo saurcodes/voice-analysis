@@ -10,6 +10,10 @@ KEYCLOAK_URL=${KEYCLOAK_URL:-http://localhost:8080}
 KEYCLOAK_REALM=${KEYCLOAK_REALM:-vocal-coach}
 KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-vocal-coach-web}
 
+# A trailing slash would double up in both config.json's issuer (".../realms/...") and the CSP
+# host text (nginx.conf.template), so strip it before either is rendered.
+KEYCLOAK_URL=${KEYCLOAK_URL%/}
+
 # These three values are interpolated into config.json (as JSON string values, unescaped) and
 # into the CSP header (as bare URL text, see nginx.conf.template); a double quote in either
 # would break out of its context, so reject it outright rather than trying to escape it.

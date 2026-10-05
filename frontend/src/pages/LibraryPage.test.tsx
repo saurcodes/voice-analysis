@@ -225,6 +225,68 @@ test("a failed job row shows Retry, which POSTs a retry and switches the row ont
   await waitFor(() => expect(screen.getAllByText("noisy-call.wav")).toHaveLength(1));
 });
 
+test("dismissing a retried row's finished job deletes both the new job and the old failed job it replaced", async () => {
+  const failedJob = jobStatus({
+    id: "job-failed-3",
+    status: "failed",
+    stage: "transcribe",
+    error: "transcription backend unavailable",
+    file_name: "noisy-call.wav",
+  });
+  const newJob = jobStatus({
+    id: "job-new-3",
+    status: "running",
+    stage: "analyse",
+    progress_pct: 40,
+    error: null,
+    file_name: "noisy-call.wav",
+  });
+  let retried = false;
+  server.use(http.get("/api/analyses", () => HttpResponse.json([])));
+  // After the retry the server lists both: the old failed job and the new running one.
+  server.use(
+    http.get("/api/jobs", () => HttpResponse.json(retried ? [failedJob, newJob] : [failedJob])),
+  );
+  server.use(
+    http.get("/api/jobs/:id/events", ({ params }) => {
+      // The new job's own stream reports it done right away; a stray watch of the old id
+      // (which must never happen) would instead see it stuck on "stage".
+      const body =
+        params.id === "job-new-3"
+          ? 'event: done\r\ndata: {"analysis_id":"analysis-3"}\r\n\r\n'
+          : 'event: stage\r\ndata: {"stage":"analyse","progress_pct":40}\r\n\r\n';
+      return new HttpResponse(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }),
+  );
+  server.use(http.get("/api/jobs/:id", () => HttpResponse.json(newJob)));
+  server.use(
+    http.post("/api/jobs/:id/retry", () => {
+      retried = true;
+      return HttpResponse.json({ job_id: "job-new-3" }, { status: 202 });
+    }),
+  );
+  const deletedIds: string[] = [];
+  server.use(
+    http.delete("/api/jobs/:id", ({ params }) => {
+      deletedIds.push(params.id as string);
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+
+  expect(await screen.findByText("transcription backend unavailable")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("Done")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Dismiss" }));
+
+  await waitFor(() => expect(screen.queryByText("noisy-call.wav")).not.toBeInTheDocument());
+  await waitFor(() => expect(deletedIds.sort()).toEqual(["job-failed-3", "job-new-3"]));
+});
+
 test("the library paginates in pages of 50 via Load more, hiding it once the pages are exhausted", async () => {
   const page1 = Array.from({ length: 50 }, (_, i) => summary({ id: `p1-${i}`, file_name: `rec-${i}.wav` }));
   const page2 = [summary({ id: "p2-0", file_name: "last-one.wav" })];

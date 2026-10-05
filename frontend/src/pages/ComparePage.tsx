@@ -1,6 +1,6 @@
 import { Link, useSearchParams } from "react-router";
 import { ApiError } from "@/api/client";
-import { useComparison, useSummaries } from "@/api/hooks";
+import { useComparison } from "@/api/hooks";
 import { AppShell } from "@/components/AppShell";
 import { ComparisonTable } from "@/components/compare/ComparisonTable";
 import { MismatchBanners } from "@/components/compare/MismatchBanners";
@@ -60,7 +60,6 @@ export function ComparePage() {
   const ids = parseIds(searchParams.get("ids"));
 
   const comparisonQuery = useComparison(ids);
-  const summariesQuery = useSummaries({ limit: 200 });
 
   if (ids.length < 2) {
     return (
@@ -77,7 +76,7 @@ export function ComparePage() {
     );
   }
 
-  if (comparisonQuery.isLoading || summariesQuery.isLoading) {
+  if (comparisonQuery.isLoading) {
     return (
       <AppShell>
         <div className="flex flex-col gap-6">
@@ -108,20 +107,15 @@ export function ComparePage() {
   const comparison = comparisonQuery.data;
   if (!comparison) return null;
 
-  const summaries = summariesQuery.data ?? [];
+  // file_names is positional with analysis_ids; a null slot (unknown file name) falls back to
+  // the id prefix.
+  const recordingNames = comparison.analysis_ids.map(
+    (id, i) => comparison.file_names[i] ?? id.slice(0, 8),
+  );
   const namesById: Record<string, string> = {};
-  for (const s of summaries) namesById[s.id] = s.file_name;
-  // Prefer the comparison result's own file_names (reflects the file name at comparison time,
-  // even for an analysis the summaries page below doesn't have loaded), falling back to the
-  // summaries lookup above, and finally the id prefix; a null slot (unknown file name) also
-  // falls through to the summaries lookup rather than rendering as a blank name.
-  const comparisonFileNames = comparison.file_names;
   comparison.analysis_ids.forEach((id, i) => {
-    const fileName = comparisonFileNames?.[i];
-    if (fileName) namesById[id] = fileName;
+    namesById[id] = recordingNames[i];
   });
-
-  const recordingNames = comparison.analysis_ids.map((id) => namesById[id] ?? id.slice(0, 8));
   const colorsById = chartColorsById(comparison.analysis_ids, comparison.recorded_at);
 
   return (

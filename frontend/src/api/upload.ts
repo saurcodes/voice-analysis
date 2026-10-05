@@ -66,6 +66,13 @@ export function uploadAnalysis(
   return getToken().then(
     (token) =>
       new Promise<UploadResult>((resolve, reject) => {
+        // A cancel can land while getToken() is still awaiting; signal.addEventListener below
+        // (which drives xhr.abort() for a cancel that arrives after this point) isn't wired up
+        // yet, so re-check here before doing anything with the XHR.
+        if (signal?.aborted) {
+          reject(new ApiError(0, "upload cancelled"));
+          return;
+        }
         const form = buildForm(file, fields);
         const xhr = new XMLHttpRequest();
         xhr.open("POST", "/api/analyses");

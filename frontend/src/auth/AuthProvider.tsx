@@ -129,9 +129,9 @@ function AuthBridge({ children }: { children: ReactNode }) {
  *   - an explicit `oidcConfig` prop (tests, or any other direct caller);
  *   - otherwise, the runtime AppConfig provided via ConfigContext, built into an
  *     oidc-client-ts config with buildOidcConfig() (src/auth/oidc.ts).
- * App.tsx mounts `<AuthProvider>` with no props and is not part of this plan task, so the
- * config can't be threaded through as a required prop there; src/bootstrap.tsx wraps App in
- * a ConfigContext.Provider after loading /config.json instead.
+ * App.tsx mounts `<AuthProvider>` with no props, so the config can't be threaded through as a
+ * required prop there; src/bootstrap.tsx wraps App in a ConfigContext.Provider after loading
+ * /config.json instead.
  */
 export function AuthProvider({
   children,

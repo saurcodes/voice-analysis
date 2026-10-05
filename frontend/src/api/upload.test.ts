@@ -156,3 +156,21 @@ test("a signal already aborted before the call rejects immediately without openi
   await expect(promise).rejects.toMatchObject({ status: 0, detail: "upload cancelled" });
   expect(FakeXMLHttpRequest.instances).toHaveLength(0);
 });
+
+test("aborting the signal while getToken is still pending rejects with the cancel error and never opens an XHR", async () => {
+  const file = new File(["hello"], "clip.wav", { lastModified: 1_700_000_000_000 });
+  const controller = new AbortController();
+  let resolveToken: (token: string) => void = () => {};
+  const tokenPromise = new Promise<string>((resolve) => {
+    resolveToken = resolve;
+  });
+
+  const promise = uploadAnalysis(file, {}, { getToken: () => tokenPromise, signal: controller.signal });
+
+  controller.abort();
+  resolveToken("tok");
+
+  await expect(promise).rejects.toBeInstanceOf(ApiError);
+  await expect(promise).rejects.toMatchObject({ status: 0, detail: "upload cancelled" });
+  expect(FakeXMLHttpRequest.instances).toHaveLength(0);
+});

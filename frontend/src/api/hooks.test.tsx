@@ -6,8 +6,8 @@ import { afterEach, expect, test, vi } from "vitest";
 import { server } from "@/test/msw";
 import { MockAuthProvider } from "@/test/MockAuthProvider";
 import type { AuthState } from "@/auth/context";
-import { jobStatus, summary } from "@/test/fixtures";
-import { useApi, useDisconnectDrive, useDriveConnect, useDriveFiles, useJobs, useSummaries } from "./hooks";
+import { jobStatus } from "@/test/fixtures";
+import { useApi, useDisconnectDrive, useDriveConnect, useDriveFiles, useJobs } from "./hooks";
 
 function buildAuth(overrides: Partial<AuthState> = {}): AuthState {
   return {
@@ -56,56 +56,6 @@ test("useApi's onUnauthorized signs in again with the current path and search as
 
   expect(signin).toHaveBeenCalledTimes(1);
   expect(signin).toHaveBeenCalledWith("/compare?ids=a,b");
-});
-
-test("useSummaries keeps the previous page's data while the next page loads", async () => {
-  server.use(
-    http.get("/api/analyses", async ({ request }) => {
-      const offset = new URL(request.url).searchParams.get("offset");
-      if (offset === "0") return HttpResponse.json([summary({ id: "first-page" })]);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      return HttpResponse.json([summary({ id: "second-page" })]);
-    }),
-  );
-
-  const { result, rerender } = renderHook(({ offset }) => useSummaries({ limit: 1, offset }), {
-    wrapper: createWrapper(),
-    initialProps: { offset: 0 },
-  });
-  await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-  rerender({ offset: 1 });
-  expect(result.current.isPlaceholderData).toBe(true);
-  expect(result.current.data?.[0]).toMatchObject({ id: "first-page" });
-
-  await waitFor(() => expect(result.current.data?.[0]).toMatchObject({ id: "second-page" }));
-});
-
-test("useSummaries resolves with the fixture summaries list", async () => {
-  const { result } = renderHook(() => useSummaries(), { wrapper: createWrapper() });
-
-  await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-  expect(result.current.data).toHaveLength(3);
-  expect(result.current.data?.[0]).toMatchObject({ file_name: "practice-run.wav" });
-});
-
-test("useSummaries passes limit and offset through as query params", async () => {
-  let capturedUrl = "";
-  server.use(
-    http.get("/api/analyses", ({ request }) => {
-      capturedUrl = request.url;
-      return HttpResponse.json([summary()]);
-    }),
-  );
-
-  const { result } = renderHook(() => useSummaries({ limit: 5, offset: 10 }), {
-    wrapper: createWrapper(),
-  });
-
-  await waitFor(() => expect(result.current.isSuccess).toBe(true));
-  expect(capturedUrl).toContain("limit=5");
-  expect(capturedUrl).toContain("offset=10");
 });
 
 test("useJobs refetches every 5s while a job is queued or running", async () => {
