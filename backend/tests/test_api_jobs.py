@@ -1,11 +1,29 @@
 import uuid
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
 from tests.api_fixtures import make_test_app
-from tests.test_api_analyses import _upload, _wav_bytes, failing_job_fn, fake_job_fn
+from tests.test_api_analyses import (
+    _capturing_job_fn, _connect_drive, _drive_overrides, _mock_get_file, _upload, _wav_bytes,
+    failing_job_fn, fake_job_fn,
+)
 from tests.test_api_jobs_sse import running_job_fn
+from vocal_coach.drive import oauth
 from vocal_coach.storage import repo
+from vocal_coach.storage.db import make_engine, make_session_factory
+
+
+def _capturing_failing_job_fn(captured):
+    """Like `_capturing_job_fn`, but the job lands `failed` (as a real Drive download failure would),
+    so the row is already terminal and ready to retry without a separate `update_job` call."""
+    def job_fn(req, database_url, config_path):
+        captured.append(req)
+        engine = make_engine(database_url)
+        with make_session_factory(engine)() as s:
+            repo.update_job(s, req.job_id, status="failed", error="could not download from Google Drive")
+        engine.dispose()
+    return job_fn
 
 
 def _job(client, ctx, job_id, sub="user-1"):
@@ -65,7 +83,8 @@ def test_retry_rejects_running_foreign_and_missing_upload(tmp_path):
         assert r.status_code == 410
 
 
-def test_retry_of_a_drive_sourced_job_is_410_with_drive_message(tmp_path):
+def test_retry_of_a_legacy_drive_job_with_no_file_id_is_410(tmp_path):
+    """A job with neither source_sha256 nor drive_file_id (pre-Plan-8 Drive job) has nothing to retry from."""
     app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
     with TestClient(app) as client:
         with ctx["session_factory"]() as s:
@@ -74,4 +93,126 @@ def test_retry_of_a_drive_sourced_job_is_410_with_drive_message(tmp_path):
             repo.update_job(s, job.id, status="failed", error="could not download from Google Drive")
         r = client.post(f"/api/jobs/{job.id}/retry", headers=ctx["auth"]())
         assert r.status_code == 410
-        assert r.json()["detail"] == "Drive-sourced jobs cannot be retried yet; analyse the file again from the Drive tab"
+        assert r.json()["detail"] == "the Drive file is no longer available; analyse it again from the Drive tab"
+
+
+def _drive_app(tmp_path, captured):
+    return make_test_app(tmp_path, job_fn=_capturing_failing_job_fn(captured), settings_overrides=_drive_overrides())
+
+
+def _create_one_drive_job(client, ctx, *, httpx_mock, file_id="f1", name="one.wav",
+                          modified_time="2026-10-01T00:00:00.000Z"):
+    """Creates a Drive job that immediately fails (the fake job_fn marks it `failed`), ready to retry."""
+    _connect_drive(ctx)
+    httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "listing-tok"})
+    _mock_get_file(httpx_mock, file_id, name=name, modified_time=modified_time)
+    r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": [file_id]})
+    assert r.status_code == 202
+    job_id = r.json()["job_ids"][0]
+    return job_id
+
+
+def test_retry_of_a_drive_job_refreshes_metadata_and_keeps_the_old_job_failed(tmp_path, httpx_mock):
+    captured = []
+    app, ctx = _drive_app(tmp_path, captured)
+    with TestClient(app) as client:
+        job_id = _create_one_drive_job(client, ctx, httpx_mock=httpx_mock)
+        old_path = captured[0].source_path
+
+        app.state.runner._job_fn = _capturing_job_fn(captured)  # the cause is gone; the retry succeeds
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "retry-tok"})
+        _mock_get_file(httpx_mock, "f1", name="one.wav", modified_time="2026-10-05T00:00:00.000Z")
+
+        r = client.post(f"/api/jobs/{job_id}/retry", headers=ctx["auth"]())
+        assert r.status_code == 202
+        new_id = r.json()["job_id"]
+        assert new_id != job_id
+        assert captured[-1].drive_modified_time == "2026-10-05T00:00:00.000Z"
+        assert captured[-1].source_path != old_path  # the new modifiedTime names a new cache path
+
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            new_row = repo.get_job(s, user.id, uuid.UUID(new_id))
+            assert new_row.drive_file_id == "f1"
+            assert new_row.drive_modified_time == "2026-10-05T00:00:00.000Z"
+            assert new_row.recorded_at == datetime(2026, 10, 5, tzinfo=timezone.utc)
+        assert _job(client, ctx, new_id)["status"] == "done"
+        assert _job(client, ctx, job_id)["status"] == "failed"  # the original is untouched
+
+
+def test_retry_of_a_drive_job_404_from_google_is_410(tmp_path, httpx_mock):
+    captured = []
+    app, ctx = _drive_app(tmp_path, captured)
+    with TestClient(app) as client:
+        job_id = _create_one_drive_job(client, ctx, httpx_mock=httpx_mock)
+
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "retry-tok"})
+        _mock_get_file(httpx_mock, "f1", name="", modified_time="", status_code=404)
+
+        r = client.post(f"/api/jobs/{job_id}/retry", headers=ctx["auth"]())
+        assert r.status_code == 410
+        assert r.json()["detail"] == "the Drive file is no longer available; analyse it again from the Drive tab"
+        assert _job(client, ctx, job_id)["status"] == "failed"
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            assert len(repo.list_jobs(s, user.id)) == 1  # no new job row was created
+
+
+def test_retry_of_a_drive_job_when_disconnected_is_409(tmp_path, httpx_mock):
+    captured = []
+    app, ctx = _drive_app(tmp_path, captured)
+    with TestClient(app) as client:
+        job_id = _create_one_drive_job(client, ctx, httpx_mock=httpx_mock)
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            repo.delete_drive_connection(s, user.id)
+
+        r = client.post(f"/api/jobs/{job_id}/retry", headers=ctx["auth"]())
+        assert r.status_code == 409
+        assert r.json()["detail"] == "drive_not_connected"
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            assert len(repo.list_jobs(s, user.id)) == 1  # no new job row was created
+
+
+def test_retry_of_a_drive_job_that_became_a_folder_is_415(tmp_path, httpx_mock):
+    captured = []
+    app, ctx = _drive_app(tmp_path, captured)
+    with TestClient(app) as client:
+        job_id = _create_one_drive_job(client, ctx, httpx_mock=httpx_mock)
+
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "retry-tok"})
+        _mock_get_file(httpx_mock, "f1", name="Now A Folder", modified_time="2026-10-05T00:00:00.000Z",
+                       mime_type="application/vnd.google-apps.folder")
+
+        r = client.post(f"/api/jobs/{job_id}/retry", headers=ctx["auth"]())
+        assert r.status_code == 415
+        assert r.json()["detail"] == "unsupported file type: Now A Folder"
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            assert len(repo.list_jobs(s, user.id)) == 1  # no new job row was created
+
+
+def _job_fixture(client, ctx, name="clip.wav"):
+    return _upload(client, ctx["auth"](), name=name).json()["job_ids"][0]
+
+
+def test_delete_job_dismisses_a_terminal_job_then_404s(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        job_id = _job_fixture(client, ctx)
+        assert _job(client, ctx, job_id)["status"] == "done"
+        assert client.delete(f"/api/jobs/{job_id}", headers=ctx["auth"]()).status_code == 204
+        assert client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).status_code == 404
+        assert client.delete(f"/api/jobs/{job_id}", headers=ctx["auth"]()).status_code == 404
+
+
+def test_delete_job_other_users_job_and_non_terminal_job_are_404(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=running_job_fn)
+    with TestClient(app) as client:
+        running_id = _upload(client, ctx["auth"]()).json()["job_ids"][0]
+        assert client.delete(f"/api/jobs/{running_id}", headers=ctx["auth"]("bob")).status_code == 404
+        assert client.delete(f"/api/jobs/{running_id}", headers=ctx["auth"]()).status_code == 404
+        with ctx["session_factory"]() as s:
+            repo.update_job(s, uuid.UUID(running_id), status="failed", error="server restarted")
+        assert client.delete(f"/api/jobs/{running_id}", headers=ctx["auth"]()).status_code == 204

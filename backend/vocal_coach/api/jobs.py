@@ -1,16 +1,21 @@
-"""Job status and progress, including the SSE stream, the jobs list and retry."""
+"""Job status and progress, including the SSE stream, the jobs list, retry and dismiss."""
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from vocal_coach.auth.deps import CurrentUser, get_current_user, get_session
+from vocal_coach.drive import cache as drive_cache
+from vocal_coach.drive import service as drive_service
+from vocal_coach.drive.client import DriveClient
+from vocal_coach.drive.errors import DriveError, DriveNotConfigured, DriveNotConnected, DriveNotFound
 from vocal_coach.jobs.events import job_events
 from vocal_coach.jobs.runner import RunnerUnavailable
 from vocal_coach.pipeline import JobRequest
@@ -21,7 +26,7 @@ router = APIRouter(tags=["jobs"])
 JobStatusName = Literal["queued", "running", "done", "failed"]
 JobStage = Literal["download", "extract", "analyse", "transcribe", "coach", "done"]
 JOBS_LIMIT_MIN, JOBS_LIMIT_MAX = 1, 200  # bounds for GET /jobs?limit=
-DRIVE_RETRY_GONE = "Drive-sourced jobs cannot be retried yet; analyse the file again from the Drive tab"
+DRIVE_GONE = "the Drive file is no longer available; analyse it again from the Drive tab"
 
 
 class JobStatus(BaseModel):
@@ -71,22 +76,69 @@ def get_job(job_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), se
     return _status(job)
 
 
+async def _retry_drive_job(request: Request, session: Session, user: CurrentUser, job) -> JobId:
+    """Retry a Drive-sourced job: refetch the file's current metadata (so a changed file downloads
+    again under its new `modifiedTime`) before creating the new job. The Google calls run off the
+    event loop; the old job is left `failed` either way.
+
+    `session` is only ever used sequentially here, before and after each `asyncio.to_thread` call
+    (never concurrently from two threads), so sharing the request's session across that boundary is
+    safe; the SQLite engine used in tests is also opened with `check_same_thread=False`."""
+    settings = request.app.state.settings
+    try:
+        token = await asyncio.to_thread(drive_service.access_token_for, session, settings, user.id)
+    except DriveNotConnected:
+        raise HTTPException(status.HTTP_409_CONFLICT, "drive_not_connected") from None
+    except DriveNotConfigured as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from None
+    except DriveError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from None
+    try:
+        file = await asyncio.to_thread(DriveClient(token).get_file, job.drive_file_id)
+    except DriveNotFound:
+        raise HTTPException(status.HTTP_410_GONE, DRIVE_GONE) from None
+    except DriveError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from None
+    if file.is_folder:
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"unsupported file type: {file.name}")
+
+    recorded_at = datetime.fromisoformat(file.modified_time.replace("Z", "+00:00"))
+    path = drive_cache.cache_path(settings.data_dir, user.id, file)
+    # The Job row keeps no speaker_context/LLM options, so a Drive retry cannot restore them; the
+    # new job runs with coaching disabled, same as a fresh Drive analysis with no options passed.
+    new = repo.create_job(session, user.id, file_name=file.name, source_sha256=None, recorded_at=recorded_at,
+                          drive_file_id=file.id, drive_modified_time=file.modified_time)
+    req = JobRequest(job_id=new.id, user_id=user.id, source_path=path, file_name=file.name,
+                     recorded_at=recorded_at, drive_file_id=file.id, drive_modified_time=file.modified_time,
+                     speaker_context=None, llm_enabled=False, llm_model=None, source_sha256=None)
+    submit_or_503(request, session, new.id, req)
+    return JobId(job_id=new.id)
+
+
 @router.post("/jobs/{job_id}/retry", status_code=status.HTTP_202_ACCEPTED, response_model=JobId,
              responses={status.HTTP_404_NOT_FOUND: {"description": "job not found"},
-                        status.HTTP_409_CONFLICT: {"description": "job is not finished"},
-                        status.HTTP_410_GONE: {"description": "the uploaded file is no longer stored, or the job is Drive-sourced"},
-                        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "job runner unavailable"}})
-def retry_job(job_id: uuid.UUID, request: Request, user: CurrentUser = Depends(get_current_user),
-              session: Session = Depends(get_session)):
+                        status.HTTP_409_CONFLICT: {"description": "job is not finished, or Drive is not connected"},
+                        status.HTTP_410_GONE: {"description": "the uploaded file, or the Drive file, is no longer available"},
+                        status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {"description": "the Drive file is now a folder"},
+                        status.HTTP_502_BAD_GATEWAY: {"description": "Google Drive returned an error"},
+                        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "job runner unavailable, or Drive is not configured"}})
+async def retry_job(job_id: uuid.UUID, request: Request, user: CurrentUser = Depends(get_current_user),
+                    session: Session = Depends(get_session)):
     job = repo.get_job(session, user.id, job_id)
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
     if job.status not in repo.TERMINAL_STATUSES:
         raise HTTPException(status.HTTP_409_CONFLICT, "job is not finished")
-    if job.source_sha256 is None:  # Drive-sourced (or legacy) job: proper Drive retry is Plan 8
-        raise HTTPException(status.HTTP_410_GONE, DRIVE_RETRY_GONE)
+    if job.drive_file_id is not None:
+        return await _retry_drive_job(request, session, user, job)
+    if job.source_sha256 is None:  # legacy Drive job with no stored file id: nothing left to retry from
+        raise HTTPException(status.HTTP_410_GONE, DRIVE_GONE)
+    # Serialises against a concurrent delete of an analysis made from the same upload: whichever side
+    # gets the lock first runs to completion (and commits) before the other's find_upload/count runs.
+    repo.lock_source_refs(session, user.id, job.source_sha256)
     found = paths.find_upload(request.app.state.settings.data_dir, user.id, job.source_sha256)
     if found is None:
+        session.rollback()  # not required (the dependency closes the session) but releases the lock promptly
         raise HTTPException(status.HTTP_410_GONE, "the uploaded file is no longer stored; upload it again")
     new = repo.create_job(session, user.id, file_name=job.file_name, source_sha256=job.source_sha256,
                           recorded_at=job.recorded_at)
@@ -94,6 +146,16 @@ def retry_job(job_id: uuid.UUID, request: Request, user: CurrentUser = Depends(g
                      recorded_at=job.recorded_at or datetime.now(timezone.utc), source_sha256=job.source_sha256)
     submit_or_503(request, session, new.id, req)
     return JobId(job_id=new.id)
+
+
+@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT,
+               responses={status.HTTP_404_NOT_FOUND: {
+                   "description": "job not found, not owned by the caller, or not yet finished"}})
+def dismiss_job(job_id: uuid.UUID, user: CurrentUser = Depends(get_current_user),
+                session: Session = Depends(get_session)):
+    if not repo.delete_job(session, user.id, job_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/jobs/{job_id}/events")

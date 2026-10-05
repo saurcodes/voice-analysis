@@ -58,3 +58,24 @@ def test_drive_configured_false_when_only_some_set(monkeypatch):
     monkeypatch.delenv("DRIVE_TOKEN_KEY", raising=False)
     s = get_settings()
     assert s.drive_configured is False
+
+
+def test_cache_max_mb_default_and_bytes(monkeypatch):
+    monkeypatch.delenv("CACHE_MAX_MB", raising=False)
+    s = Settings(_env_file=None)
+    assert s.cache_max_mb == 2048
+    assert s.cache_max_bytes == 2048 * 1024 * 1024
+
+
+def test_drive_max_mb_defaults_to_none_and_falls_back_to_max_upload_bytes(monkeypatch):
+    monkeypatch.delenv("DRIVE_MAX_MB", raising=False)
+    s = Settings(_env_file=None, max_upload_mb=500)
+    assert s.drive_max_mb is None
+    assert s.drive_max_bytes == s.max_upload_bytes == 500 * 1024 * 1024
+
+
+def test_drive_max_mb_overrides_the_fallback(monkeypatch):
+    monkeypatch.setenv("DRIVE_MAX_MB", "100")
+    s = get_settings()
+    assert s.drive_max_mb == 100
+    assert s.drive_max_bytes == 100 * 1024 * 1024

@@ -93,6 +93,31 @@ def test_job_lifecycle_and_scoping(session):
     assert set(JOB_STATUSES) == {"queued", "running", "done", "failed"}
 
 
+def test_create_job_stores_drive_fields(session):
+    u = repo.upsert_user(session, "a", None, None)
+    job = repo.create_job(session, u.id, file_name="f.wav", drive_file_id="file-123",
+                          drive_modified_time="2026-10-01T00:00:00.000Z")
+    assert job.drive_file_id == "file-123"
+    assert job.drive_modified_time == "2026-10-01T00:00:00.000Z"
+    plain = repo.create_job(session, u.id)
+    assert plain.drive_file_id is None and plain.drive_modified_time is None
+
+
+def test_delete_job_requires_ownership_and_terminal_status(session):
+    a = repo.upsert_user(session, "a", None, None)
+    b = repo.upsert_user(session, "b", None, None)
+    done = repo.update_job(session, repo.create_job(session, a.id).id, status="done")
+    running = repo.create_job(session, a.id)
+    assert repo.delete_job(session, b.id, done.id) is False  # not owned by b
+    assert repo.get_job(session, a.id, done.id) is not None  # still there
+    assert repo.delete_job(session, a.id, running.id) is False  # not terminal
+    assert repo.get_job(session, a.id, running.id) is not None
+    assert repo.delete_job(session, a.id, done.id) is True
+    assert repo.get_job(session, a.id, done.id) is None
+    assert repo.delete_job(session, a.id, done.id) is False  # already gone
+    assert repo.delete_job(session, a.id, uuid.uuid4()) is False  # unknown id
+
+
 def test_fail_stale_jobs(session):
     u = repo.upsert_user(session, "a", None, None)
     q = repo.create_job(session, u.id)
@@ -326,6 +351,89 @@ def test_count_source_refs_counts_analyses_and_unfinished_jobs(session):
     assert repo.count_source_refs(session, u.id, src) == 1
     repo.delete_analysis(session, u.id, row.id)
     assert repo.count_source_refs(session, u.id, src) == 0
+
+
+def test_delete_analysis_and_count_refs_calls_on_unreferenced_before_commit_when_refs_hit_zero(session):
+    u = repo.upsert_user(session, "a", None, None)
+    src = "f" * 64
+    row = repo.create_analysis(
+        session, u.id, file_name="a.m4a", drive_file_id=None, content_sha256="e" * 64, source_sha256=src,
+        recorded_at=utcnow(), analyser_version="0.1.0", config_hash="sha256:c1", metrics_json={},
+    )
+    calls = []
+    deleted, refs, drive_refs = repo.delete_analysis_and_count_refs(
+        session, u.id, row.id, src, on_unreferenced=lambda: calls.append("called"),
+    )
+    assert deleted is True and refs == 0 and drive_refs == 0
+    assert calls == ["called"]
+    assert repo.get_analysis(session, u.id, row.id) is None  # the delete did commit
+
+
+def test_delete_analysis_and_count_refs_skips_on_unreferenced_while_another_row_shares_the_hash(session):
+    u = repo.upsert_user(session, "a", None, None)
+    src = "f" * 64
+    first = repo.create_analysis(
+        session, u.id, file_name="a.m4a", drive_file_id=None, content_sha256="e" * 64, source_sha256=src,
+        recorded_at=utcnow(), analyser_version="0.1.0", config_hash="sha256:c1", metrics_json={},
+    )
+    repo.create_analysis(
+        session, u.id, file_name="b.m4a", drive_file_id=None, content_sha256="d" * 64, source_sha256=src,
+        recorded_at=utcnow(), analyser_version="0.1.0", config_hash="sha256:c2", metrics_json={},
+    )
+    calls = []
+    deleted, refs, drive_refs = repo.delete_analysis_and_count_refs(
+        session, u.id, first.id, src, on_unreferenced=lambda: calls.append("called"),
+    )
+    assert deleted is True and refs == 1 and drive_refs == 0
+    assert calls == []  # still referenced: the callback must not fire
+
+
+def test_delete_analysis_and_count_refs_rolls_back_when_on_unreferenced_raises(session):
+    u = repo.upsert_user(session, "a", None, None)
+    src = "f" * 64
+    row = repo.create_analysis(
+        session, u.id, file_name="a.m4a", drive_file_id=None, content_sha256="e" * 64, source_sha256=src,
+        recorded_at=utcnow(), analyser_version="0.1.0", config_hash="sha256:c1", metrics_json={},
+    )
+
+    def _boom():
+        raise OSError("disk is gone")
+
+    with pytest.raises(OSError, match="disk is gone"):
+        repo.delete_analysis_and_count_refs(session, u.id, row.id, src, on_unreferenced=_boom)
+    assert repo.get_analysis(session, u.id, row.id) is not None  # rolled back: the row is still there
+
+
+def test_delete_analysis_and_count_refs_handles_drive_refs_the_same_way(session):
+    """Same before-commit-callback treatment as `source_sha256`, but keyed on `drive_file_id`."""
+    u = repo.upsert_user(session, "a", None, None)
+    first = repo.create_analysis(
+        session, u.id, file_name="a.wav", drive_file_id="f1", content_sha256="e" * 64,
+        recorded_at=utcnow(), analyser_version="0.1.0", config_hash="sha256:c1", metrics_json={},
+    )
+    second = repo.create_analysis(
+        session, u.id, file_name="b.wav", drive_file_id="f1", content_sha256="d" * 64,
+        recorded_at=utcnow(), analyser_version="0.1.0", config_hash="sha256:c2", metrics_json={},
+    )
+    calls = []
+    deleted, refs, drive_refs = repo.delete_analysis_and_count_refs(
+        session, u.id, first.id, None, "f1", on_drive_unreferenced=lambda: calls.append("called"),
+    )
+    assert deleted is True and refs == 0 and drive_refs == 1
+    assert calls == []  # still referenced by `second`
+
+    deleted, refs, drive_refs = repo.delete_analysis_and_count_refs(
+        session, u.id, second.id, None, "f1", on_drive_unreferenced=lambda: calls.append("called"),
+    )
+    assert deleted is True and drive_refs == 0
+    assert calls == ["called"]
+
+
+def test_lock_source_refs_is_a_noop_select_on_sqlite(session):
+    """No row locking on SQLite (no `with_for_update` support worth exercising here); this just
+    confirms the helper runs without raising and does not touch unrelated state."""
+    u = repo.upsert_user(session, "a", None, None)
+    repo.lock_source_refs(session, u.id, "f" * 64)  # must not raise
 
 
 def test_previous_analysis_returns_newest_earlier_row_scoped_to_user(session):

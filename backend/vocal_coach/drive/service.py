@@ -99,10 +99,13 @@ def access_token_for(session: Session, settings: Settings, user_id: uuid.UUID) -
         raise
 
 
-def list_files(session: Session, settings: Settings, user_id: uuid.UUID, folder_id: str | None) -> list[DriveFile]:
+def list_files(
+    session: Session, settings: Settings, user_id: uuid.UUID, folder_id: str | None, *,
+    include_folders: bool = False,
+) -> list[DriveFile]:
     require_configured(settings)
     access_token = access_token_for(session, settings, user_id)
-    return DriveClient(access_token).list_media(folder_id)
+    return DriveClient(access_token).list_media(folder_id, include_folders=include_folders)
 
 
 def connection_status(session: Session, user_id: uuid.UUID) -> tuple[bool, str | None]:
@@ -118,9 +121,16 @@ def download_for_job(
     """Downloads a Drive file into the job's cache path, unless it is already cached (a concurrent
     job for the same file id + modifiedTime already wrote it). Called from inside the worker, with
     its own session/settings. Any `DriveError` subclass propagates for the pipeline to translate
-    into a user-facing message, including `DriveError("drive file too large")` past the upload cap."""
+    into a user-facing message, including `DriveError("drive file too large")` past `DRIVE_MAX_MB`.
+
+    Before downloading, evicts least-recently-used cache files (across all users) down to
+    `CACHE_MAX_MB`, protecting `dest` so a cap already at or over the limit never blocks this job's
+    own download. Only this download's destination is protected: with `JOB_WORKERS>1` a concurrent
+    job's cached source (one it has not finished reading) may be evicted. The prune runs before the
+    download, so the cache can end up over the cap by up to the size of this one download."""
     if cache.is_cached(dest):
         return dest
+    cache.prune_lru(settings.data_dir, max_bytes=settings.cache_max_bytes, protect=frozenset({dest}))
     token = access_token_for(session, settings, user_id)
-    DriveClient(token).download(file_id, dest, max_bytes=settings.max_upload_bytes)
+    DriveClient(token).download(file_id, dest, max_bytes=settings.drive_max_bytes)
     return dest

@@ -7,6 +7,7 @@ import { RequireAuth } from "@/auth/RequireAuth";
 import { AppShell } from "@/components/AppShell";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ApiError } from "@/api/client";
 import { LibraryPage } from "@/pages/LibraryPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -19,7 +20,20 @@ const ComparePage = lazy(() =>
   import("@/pages/ComparePage").then((module) => ({ default: module.ComparePage })),
 );
 
-const queryClient = new QueryClient();
+// A server answer (ApiError, e.g. a 404/422/503) is final and worth no retry; only a
+// network-level failure gets the TanStack Query default's two extra attempts. Mutations never
+// retry: a retried POST/DELETE could double a side effect the user didn't ask to repeat.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (count, error) => !(error instanceof ApiError) && count < 2,
+      refetchOnWindowFocus: false,
+    },
+    mutations: {
+      retry: false,
+    },
+  },
+});
 
 /** Shown while a lazy page's chunk loads: the shell plus a header and content skeleton, the
  * same shape both lazy pages show while their own data loads. */

@@ -207,6 +207,8 @@ export const handlers = [
     HttpResponse.json({ job_id: params.id as string }, { status: 202 }),
   ),
 
+  http.delete("/api/jobs/:id", () => new HttpResponse(null, { status: 204 })),
+
   http.get("/api/jobs/:id/events", () => {
     // CRLF line/frame terminators, matching the real backend's sse-starlette 3.x output
     // (its default separator is "\r\n", not the bare "\n" the SSE spec's examples use).

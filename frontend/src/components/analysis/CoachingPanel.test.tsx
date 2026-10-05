@@ -226,6 +226,22 @@ test("a 503 from the re-run keeps the dialog open with the error alert visible",
   await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
 });
 
+test("while coaching is running, the panel shows a running indicator and disables Re-run", async () => {
+  server.use(...llmEnabledHandlers());
+  server.use(http.post("/api/analyses/:id/coach", () => new Promise<never>(() => {})));
+
+  const user = userEvent.setup();
+  renderPanel();
+  await openDialogWithModels(user);
+  await user.click(screen.getByRole("button", { name: "Run" }));
+
+  expect(await screen.findByText("Coaching is running")).toBeInTheDocument();
+  // The dialog that started the mutation is still open and marks the rest of the page
+  // aria-hidden, so the panel's own trigger button is queried with `hidden: true` here.
+  expect(screen.getByRole("button", { name: "Re-run coaching", hidden: true })).toBeDisabled();
+  expect(screen.queryByText("Coaching is not enabled on this server yet")).not.toBeInTheDocument();
+});
+
 test("the re-run dialog shows the provider-unavailable text and keeps Run disabled when /llm/models is 503", async () => {
   server.use(...llmEnabledHandlers());
   let modelCalls = 0;

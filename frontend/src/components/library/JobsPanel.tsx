@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useJobs } from "@/api/hooks";
+import { WarningCircle } from "@phosphor-icons/react";
+import { useDismissJob, useJobs } from "@/api/hooks";
 import { JobProgressList, type JobProgressItem } from "./JobProgressList";
 
 const VISIBLE_STATUSES = new Set(["queued", "running", "failed"]);
@@ -20,12 +21,26 @@ const VISIBLE_STATUSES = new Set(["queued", "running", "failed"]);
 export function JobsPanel({ excludeIds = [] }: { excludeIds?: string[] }) {
   const jobsQuery = useJobs();
   const queryClient = useQueryClient();
+  const dismissJob = useDismissJob();
   const [retried, setRetried] = useState<Record<string, string>>({});
+  // Dismissed ids are removed from view immediately (optimistic), ahead of the DELETE
+  // resolving: a dropped row never has to wait on a round-trip to disappear, and a 404 (the
+  // most likely failure, e.g. a double-click) is treated as success anyway. A genuine failure
+  // (anything else) rolls the id back out of this set in onError below, so the row reappears
+  // rather than staying hidden for the rest of the mount.
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  // One message per job id whose dismiss failed; cleared on the next dismiss attempt for that
+  // id (whether it succeeds or fails again).
+  const [dismissErrors, setDismissErrors] = useState<Record<string, string>>({});
 
   const excluded = new Set(excludeIds);
   const retryTargets = new Set(Object.values(retried));
   const jobs = (jobsQuery.data ?? []).filter(
-    (job) => VISIBLE_STATUSES.has(job.status) && !excluded.has(job.id) && !retryTargets.has(job.id),
+    (job) =>
+      VISIBLE_STATUSES.has(job.status) &&
+      !excluded.has(job.id) &&
+      !retryTargets.has(job.id) &&
+      !dismissed.has(job.id),
   );
 
   if (jobs.length === 0) return null;
@@ -45,13 +60,47 @@ export function JobsPanel({ excludeIds = [] }: { excludeIds?: string[] }) {
     void queryClient.invalidateQueries({ queryKey: ["vc", "jobs"] });
   }
 
+  // `jobId` is the row's CURRENT id as JobProgressList reports it: after a retry that's the
+  // NEW job id, not the row's key in `dismissed`/`dismissErrors` (both keyed on the original,
+  // still-failed job id from the server list). `rowKey` resolves back to that original id so
+  // the row actually disappears, and when it differs from `jobId` the old failed job is
+  // deleted too (otherwise it would be left behind on the server, listed as failed forever).
+  function handleDismiss(jobId: string) {
+    const rowKey = Object.keys(retried).find((key) => retried[key] === jobId) ?? jobId;
+    setDismissErrors((prev) => {
+      if (!(rowKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[rowKey];
+      return next;
+    });
+    setDismissed((prev) => new Set(prev).add(rowKey));
+    const rollback = () => {
+      setDismissed((prev) => {
+        const next = new Set(prev);
+        next.delete(rowKey);
+        return next;
+      });
+      setDismissErrors((prev) => ({ ...prev, [rowKey]: "Could not dismiss this job" }));
+    };
+    dismissJob.mutate(jobId, { onError: rollback });
+    if (rowKey !== jobId) dismissJob.mutate(rowKey, { onError: rollback });
+  }
+
   return (
     <section aria-labelledby="jobs-panel-heading" className="mb-6 rounded-lg border border-border bg-card p-4">
       <h2 id="jobs-panel-heading" className="text-sm font-medium text-muted-foreground">
         Processing
       </h2>
       <div className="mt-3">
-        <JobProgressList jobs={items} onRetried={handleRetried} />
+        <JobProgressList jobs={items} onRetried={handleRetried} onDismiss={handleDismiss} />
+        {jobs
+          .filter((job) => dismissErrors[job.id])
+          .map((job) => (
+            <p key={job.id} role="alert" className="mt-2 flex items-center gap-1.5 text-sm text-serious">
+              <WarningCircle weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+              {dismissErrors[job.id]}
+            </p>
+          ))}
       </div>
     </section>
   );

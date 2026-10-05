@@ -225,6 +225,171 @@ test("a failed job row shows Retry, which POSTs a retry and switches the row ont
   await waitFor(() => expect(screen.getAllByText("noisy-call.wav")).toHaveLength(1));
 });
 
+test("dismissing a retried row's finished job deletes both the new job and the old failed job it replaced", async () => {
+  const failedJob = jobStatus({
+    id: "job-failed-3",
+    status: "failed",
+    stage: "transcribe",
+    error: "transcription backend unavailable",
+    file_name: "noisy-call.wav",
+  });
+  const newJob = jobStatus({
+    id: "job-new-3",
+    status: "running",
+    stage: "analyse",
+    progress_pct: 40,
+    error: null,
+    file_name: "noisy-call.wav",
+  });
+  let retried = false;
+  server.use(http.get("/api/analyses", () => HttpResponse.json([])));
+  // After the retry the server lists both: the old failed job and the new running one.
+  server.use(
+    http.get("/api/jobs", () => HttpResponse.json(retried ? [failedJob, newJob] : [failedJob])),
+  );
+  server.use(
+    http.get("/api/jobs/:id/events", ({ params }) => {
+      // The new job's own stream reports it done right away; a stray watch of the old id
+      // (which must never happen) would instead see it stuck on "stage".
+      const body =
+        params.id === "job-new-3"
+          ? 'event: done\r\ndata: {"analysis_id":"analysis-3"}\r\n\r\n'
+          : 'event: stage\r\ndata: {"stage":"analyse","progress_pct":40}\r\n\r\n';
+      return new HttpResponse(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }),
+  );
+  server.use(http.get("/api/jobs/:id", () => HttpResponse.json(newJob)));
+  server.use(
+    http.post("/api/jobs/:id/retry", () => {
+      retried = true;
+      return HttpResponse.json({ job_id: "job-new-3" }, { status: 202 });
+    }),
+  );
+  const deletedIds: string[] = [];
+  server.use(
+    http.delete("/api/jobs/:id", ({ params }) => {
+      deletedIds.push(params.id as string);
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+
+  expect(await screen.findByText("transcription backend unavailable")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("Done")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Dismiss" }));
+
+  await waitFor(() => expect(screen.queryByText("noisy-call.wav")).not.toBeInTheDocument());
+  await waitFor(() => expect(deletedIds.sort()).toEqual(["job-failed-3", "job-new-3"]));
+});
+
+test("the library paginates in pages of 50 via Load more, hiding it once the pages are exhausted", async () => {
+  const page1 = Array.from({ length: 50 }, (_, i) => summary({ id: `p1-${i}`, file_name: `rec-${i}.wav` }));
+  const page2 = [summary({ id: "p2-0", file_name: "last-one.wav" })];
+  server.use(
+    http.get("/api/analyses", ({ request }) => {
+      const offset = Number(new URL(request.url).searchParams.get("offset") ?? "0");
+      return HttpResponse.json(offset === 0 ? page1 : page2);
+    }),
+  );
+  server.use(http.get("/api/jobs", () => HttpResponse.json([])));
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+
+  await screen.findByText("rec-0.wav");
+  expect(screen.queryByText("last-one.wav")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("checkbox", { name: "Select rec-0.wav" }));
+  await user.click(screen.getByRole("button", { name: "Load more" }));
+
+  await screen.findByText("last-one.wav");
+  expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+  // The earlier selection survives the extra page loading in.
+  expect(screen.getByRole("checkbox", { name: "Select rec-0.wav" })).toBeChecked();
+});
+
+test("dismissing a failed job calls DELETE and removes the row", async () => {
+  const failedJob = jobStatus({
+    id: "job-dismiss-1",
+    status: "failed",
+    error: "decoder crashed",
+    file_name: "bad-take.wav",
+  });
+  let jobs = [failedJob];
+  server.use(http.get("/api/analyses", () => HttpResponse.json([])));
+  server.use(http.get("/api/jobs", () => HttpResponse.json(jobs)));
+  let deletedId: string | undefined;
+  server.use(
+    http.delete("/api/jobs/:id", ({ params }) => {
+      deletedId = params.id as string;
+      jobs = jobs.filter((job) => job.id !== params.id);
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+
+  expect(await screen.findByText("decoder crashed")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Dismiss" }));
+
+  await waitFor(() => expect(deletedId).toBe("job-dismiss-1"));
+  await waitFor(() => expect(screen.queryByText("decoder crashed")).not.toBeInTheDocument());
+});
+
+test("a dismiss the server rejects (500) rolls back: the row reappears with an alert", async () => {
+  const failedJob = jobStatus({
+    id: "job-dismiss-2",
+    status: "failed",
+    error: "decoder crashed",
+    file_name: "bad-take.wav",
+  });
+  server.use(http.get("/api/analyses", () => HttpResponse.json([])));
+  server.use(http.get("/api/jobs", () => HttpResponse.json([failedJob])));
+  server.use(
+    http.delete("/api/jobs/:id", () => HttpResponse.json({ detail: "server error" }, { status: 500 })),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+
+  expect(await screen.findByText("decoder crashed")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Dismiss" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not dismiss this job");
+  // The row itself (its failure message and Dismiss button) stays visible throughout.
+  expect(screen.getByText("decoder crashed")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+});
+
+test("dismissing an already-gone job (404) is treated as success and the row stays dismissed", async () => {
+  const failedJob = jobStatus({
+    id: "job-dismiss-3",
+    status: "failed",
+    error: "decoder crashed",
+    file_name: "bad-take.wav",
+  });
+  server.use(http.get("/api/analyses", () => HttpResponse.json([])));
+  server.use(http.get("/api/jobs", () => HttpResponse.json([failedJob])));
+  server.use(
+    http.delete("/api/jobs/:id", () => HttpResponse.json({ detail: "not found" }, { status: 404 })),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+
+  expect(await screen.findByText("decoder crashed")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Dismiss" }));
+
+  await waitFor(() => expect(screen.queryByText("decoder crashed")).not.toBeInTheDocument());
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 test("a retry the server refuses (410) shows its detail inline", async () => {
   const failedJob = jobStatus({
     id: "job-failed-2",

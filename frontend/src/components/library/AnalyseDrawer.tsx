@@ -48,6 +48,12 @@ function errorDetail(error: unknown): string {
   return "Upload failed";
 }
 
+/** Tells an upload this drawer itself aborted (via a row's Cancel button) apart from a real
+ * network failure, which also surfaces as ApiError(0, ...) but with a different message. */
+function isCancelledUpload(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 0 && error.detail === "upload cancelled";
+}
+
 function driveErrorDetail(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 409) return "Connect Google Drive in Settings";
@@ -96,6 +102,9 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
   const [submitting, setSubmitting] = useState(false);
   const [rows, setRows] = useState<JobProgressItem[]>([]);
   const batchRef = useRef(0);
+  // One AbortController per upload-tab row, keyed by the row's key, held only while that
+  // file's upload is in flight; a Cancel click looks itself up here and aborts it.
+  const uploadControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   const driveConfigured = meQuery.data?.drive_configured === true;
   const llmDisabled = meQuery.data?.llm_enabled === false;
@@ -123,6 +132,7 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
     setLlmEnabled(false);
     setLlmModelOverride(null);
     setRows([]);
+    uploadControllersRef.current.clear();
   }
 
   function handleOpenChange(next: boolean) {
@@ -202,6 +212,8 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
     for (let index = 0; index < files.length; index++) {
       const file = files[index];
       const key = rowKey(batch, file, index);
+      const controller = new AbortController();
+      uploadControllersRef.current.set(key, controller);
       setRows((prev) => prev.map((row) => (row.key === key ? { ...row, uploadPct: 0 } : row)));
       try {
         const result = await uploadAnalysis(
@@ -213,6 +225,7 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
           },
           {
             getToken,
+            signal: controller.signal,
             onProgress: (pct) => {
               setRows((prev) => prev.map((row) => (row.key === key ? { ...row, uploadPct: pct } : row)));
             },
@@ -229,8 +242,16 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
           void queryClient.invalidateQueries({ queryKey: ["vc", "jobs"] });
         }
       } catch (error) {
-        const message = errorDetail(error);
-        setRows((prev) => prev.map((row) => (row.key === key ? { ...row, error: message } : row)));
+        if (isCancelledUpload(error)) {
+          setRows((prev) =>
+            prev.map((row) => (row.key === key ? { ...row, cancelled: true, uploadPct: undefined } : row)),
+          );
+        } else {
+          const message = errorDetail(error);
+          setRows((prev) => prev.map((row) => (row.key === key ? { ...row, error: message } : row)));
+        }
+      } finally {
+        uploadControllersRef.current.delete(key);
       }
     }
 
@@ -238,6 +259,10 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
     // The batch is out of the picker: clear it so the button reads "Analyse 0 files" again.
     // The progress rows stay.
     setFiles([]);
+  }
+
+  function handleCancelUpload(key: string) {
+    uploadControllersRef.current.get(key)?.abort();
   }
 
   function handleRetried(_oldJobId: string, newJobId: string) {
@@ -376,7 +401,7 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
           {rows.length > 0 && (
             <div className="flex flex-col gap-2">
               <h3 className="text-sm font-medium">Progress</h3>
-              <JobProgressList jobs={rows} onRetried={handleRetried} />
+              <JobProgressList jobs={rows} onRetried={handleRetried} onCancel={handleCancelUpload} />
             </div>
           )}
         </div>

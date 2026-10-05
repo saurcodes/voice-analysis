@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { useLocation } from "react-router";
 import {
-  keepPreviousData,
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -68,8 +68,9 @@ const LLM_MODELS_STALE_MS = 5 * 60_000;
 /**
  * The provider's model list. Listing hits the LLM server (it can be slow or down), so callers
  * only enable this when they are about to show a model picker; the result stays fresh for five
- * minutes and is not refetched on window focus. A server answer (ApiError, e.g. a 503 when the
- * provider is unreachable) is final; only a network-level failure is retried, once.
+ * minutes. A server answer (ApiError, e.g. a 503 when the provider is unreachable) is final;
+ * only a network-level failure is retried, and just once here (the app-wide default allows
+ * two, but a slow/down LLM server isn't worth a third attempt before the caller can react).
  */
 export function useLlmModels({ enabled = true }: { enabled?: boolean } = {}) {
   const api = useApi();
@@ -78,24 +79,25 @@ export function useLlmModels({ enabled = true }: { enabled?: boolean } = {}) {
     queryFn: () => api.get<LlmModels>("/api/llm/models"),
     enabled,
     staleTime: LLM_MODELS_STALE_MS,
-    refetchOnWindowFocus: false,
     retry: (failureCount, error) => !(error instanceof ApiError) && failureCount < 1,
   });
 }
 
-export interface SummariesParams {
-  limit?: number;
-  offset?: number;
-}
+const SUMMARIES_PAGE_SIZE = 50;
 
-export function useSummaries({ limit = 50, offset = 0 }: SummariesParams = {}) {
+/** The Library's main feed: pages of 50 by offset, via useInfiniteQuery rather than
+ * useSummaries' growing-limit approach, so "Load more" appends a page instead of re-fetching
+ * everything seen so far under a wider limit. A page shorter than the page size is the last
+ * one (whether that's because the server ran out of rows, or it was the very first page). */
+export function useSummariesInfinite() {
   const api = useApi();
-  return useQuery({
-    queryKey: ["vc", "summaries", { limit, offset }] as const,
-    queryFn: () =>
-      api.get<AnalysisSummary[]>(`/api/analyses?limit=${limit}&offset=${offset}`),
-    // "Load more" changes the key; keep showing the current rows instead of a skeleton flash.
-    placeholderData: keepPreviousData,
+  return useInfiniteQuery({
+    queryKey: ["vc", "summaries", "infinite"] as const,
+    queryFn: ({ pageParam }) =>
+      api.get<AnalysisSummary[]>(`/api/analyses?limit=${SUMMARIES_PAGE_SIZE}&offset=${pageParam}`),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length < SUMMARIES_PAGE_SIZE ? undefined : allPages.length * SUMMARIES_PAGE_SIZE,
   });
 }
 
@@ -164,14 +166,16 @@ export function useDeleteAnalysis() {
 
 /** Re-runs coaching for an analysis. On success, writes the updated AnalysisDetail straight
  * into that analysis's query cache (so the Coaching tab re-renders from fresh data without a
- * refetch) and invalidates the summaries list (has_coaching may have flipped). */
-export function useCoachAnalysis() {
+ * refetch) and invalidates the summaries list (has_coaching may have flipped). Carries the
+ * analysis id in its mutationKey so CoachingPanel's useIsMutating({mutationKey}) can tell
+ * whether coaching is running for this specific analysis, independent of any other mutation. */
+export function useCoachAnalysis(id: string) {
   const api = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: CoachRequest }) =>
-      api.post<AnalysisDetail>(`/api/analyses/${id}/coach`, body),
-    onSuccess: (detail, { id }) => {
+    mutationKey: ["vc", "coach", id] as const,
+    mutationFn: (body: CoachRequest) => api.post<AnalysisDetail>(`/api/analyses/${id}/coach`, body),
+    onSuccess: (detail) => {
       queryClient.setQueryData(["vc", "analysis", id], detail);
       void queryClient.invalidateQueries({ queryKey: SUMMARIES_KEY });
     },
@@ -183,6 +187,26 @@ export function useRetryJob() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post<JobId>(`/api/jobs/${id}/retry`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: JOBS_KEY });
+    },
+  });
+}
+
+/** Dismisses a terminal (done/failed) job so it drops off JobsPanel. A 404 (already dismissed
+ * from another tab, or already gone) is treated as success rather than an error the user has
+ * to dismiss a second time. */
+export function useDismissJob() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      try {
+        await api.del<void>(`/api/jobs/${id}`);
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 404) throw error;
+      }
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: JOBS_KEY });
     },

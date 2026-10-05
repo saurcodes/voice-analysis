@@ -101,6 +101,8 @@ class Job(Base):
     analysis_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("analyses.id", ondelete="SET NULL"))
     file_name: Mapped[str | None] = mapped_column(Text)
     source_sha256: Mapped[str | None] = mapped_column(String(SHA256_HEX_CHARS))
+    drive_file_id: Mapped[str | None] = mapped_column(Text)  # set for Drive-sourced jobs; lets retry refetch metadata
+    drive_modified_time: Mapped[str | None] = mapped_column(Text)  # Drive's modifiedTime at job creation
     recorded_at: Mapped[datetime | None] = mapped_column(TZDateTime)  # carried over by POST /jobs/{id}/retry
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, onupdate=utcnow, nullable=False)

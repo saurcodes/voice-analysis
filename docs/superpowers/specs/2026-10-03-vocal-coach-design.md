@@ -3,6 +3,8 @@
 Date: 2026-10-03
 Status: approved for planning
 
+See §20 for amendments made during implementation.
+
 ## 1. Purpose
 
 A multi-user web app that pulls a speaker's audio or video recordings from their Google Drive (or local upload), measures the voice with pure signal analysis, and turns those measurements into coaching feedback via an LLM. React frontend, FastAPI backend, Keycloak for login, Postgres for storage.
@@ -573,8 +575,8 @@ Not tested against real Google or Keycloak; both are mocked. A `scripts/smoke.sh
 
 ## 17. Engineering
 
-- Backend: Python 3.11+, `pyproject.toml` (pip-installable), dependencies: fastapi, uvicorn, sqlalchemy ≥ 2, alembic, psycopg, pydantic ≥ 2, pydantic-settings, python-jose or PyJWT with cryptography, itsdangerous, cryptography (Fernet), praat-parselmouth, numpy, scipy, faster-whisper, pyyaml, google-api-python-client, google-auth-oauthlib, openai, anthropic, sse-starlette, pytest, pytest-httpx, testcontainers.
-- Frontend: Node 20, pnpm.
+- Backend: Python 3.11+, `pyproject.toml` (pip-installable), dependencies: fastapi, uvicorn, sqlalchemy ≥ 2, alembic, psycopg, pydantic ≥ 2, pydantic-settings, python-jose or PyJWT with cryptography, itsdangerous, cryptography (Fernet), praat-parselmouth, numpy, scipy, faster-whisper, pyyaml, google-api-python-client, google-auth-oauthlib, openai, anthropic, sse-starlette, pytest, pytest-httpx, testcontainers. (Amended: see §20, Plan 8 item 5.)
+- Frontend: Node 20, pnpm. (Amended: see §20, Plan 8 item 5.)
 - README: prerequisites (Docker, ffmpeg for local dev), Google Cloud OAuth web client setup, Keycloak first-run (realm imported, create a user), local OpenAI-compatible server (Ollama example), optional Anthropic key, `docker compose up`, dev mode, running tests.
 - `.gitignore`: `.env`, `data/`, `backend/.venv/`, `frontend/node_modules/`, `frontend/dist/`.
 
@@ -599,3 +601,67 @@ Each phase leaves the stack runnable.
 - Automatic formant ceiling selection.
 - Horizontal scaling of job workers (Celery/Redis); single backend process.
 - Service-account Drive access.
+
+## 20. Amendments log
+
+Every change to this spec made while implementing it, by plan. Plans 6, 7 and 8 record their amendments in the plan header; the entries for those plans are copied from there. Plans 1 to 4 recorded theirs in prose (self-review "deviation" notes and in-place spec edits); their entries below are derived from where the code differs from the original text of this spec, worded as "code does X; spec said Y", with the file that shows it. Plan 5 has no amendments header; its entries come from its self-review notes. Where a section above was already edited in place, it reflects the amendment and the original wording is quoted here.
+
+### Plan 1: analysis core (`docs/superpowers/plans/2026-10-03-plan-1-analysis-core.md`)
+
+1. §6.3 recording_quality: code clamps intensity at 0 dB before any metric (`backend/vocal_coach/analysis/tracks.py`, `INTENSITY_FLOOR_DB`); spec said nothing, so Praat's -300 dB for digital silence would have reached the noise floor.
+2. §6.3 pace: code calls `find_peaks(prominence=syllable_peak_prominence_db, wlen=0.4 s)` (`analysis/pace.py`); spec said `find_peaks(prominence=syllable_peak_prominence_db)` with no window.
+3. §6.3 energy: code anchors the final window at the end of the last phrase and takes the body as everything before it (`analysis/energy.py`); spec said "median speaking intensity excluding final `energy_window_s`" of the recording.
+4. §6.3 articulation: code computes a two-band spectral tilt, (mean dB in `hf_band_hz` - mean dB in `lf_band_hz`) / log2 of the band-midpoint ratio over a Welch PSD (`analysis/articulation.py`, `_tilt`); spec said the slope of an LTAS (100 Hz bins) regressed on log2(f) over 500-8000 Hz.
+5. §6.2 and §15: code adds `analysis.min_duration_s: 2.0` and reports `reasons: ["too_short"]` with every metric field null below it (`analysis/analyser.py`, `backend/config.yaml`); spec said audio under 2 s gives `["no_voiced_speech"]` with only pitch and intonation fields null.
+6. §3.1: code passes a shared `Tracks` object (F0, intensity, samples extracted once) to each `analysis/*` module and computes recording quality in `analysis/quality.py`; spec said `compute(sound, cfg, **deps)` and recording_quality inside `analyser.py`. No output field changes.
+
+### Plan 2: transcription (`docs/superpowers/plans/2026-10-03-plan-2-transcription.md`)
+
+1. §7: code feeds faster-whisper the decoded 16 kHz float32 samples, with `vad_filter false` and `condition_on_previous_text false` (`backend/vocal_coach/transcription/transcriber.py`); spec said faster-whisper on the file, with neither option set.
+2. §7: code keeps words from segments with `no_speech_prob > transcription.no_speech_exclude_prob` (default 0.6) in `segments`/`words` but leaves them out of `derived` (`transcription/run.py`, `backend/config.yaml`); spec had no such rule or config key.
+3. §6.4 serialisation: code rounds transcript probabilities, log-probabilities and fractions to 6 decimals (`analysis/serialise.py`, `SIX_DECIMAL_FIELDS`); spec said 6 decimals for "ratios" only. No metrics key changes.
+
+### Plan 3: storage and comparison (`docs/superpowers/plans/2026-10-03-plan-3-storage-comparison.md`)
+
+1. §8: code's unique key is `(user_id, content_sha256, config_hash, analyser_version)` and adds index `(user_id, recorded_at)` (`backend/vocal_coach/storage/models.py`); spec said `unique (user_id, content_sha256, config_hash)` and no index, so a new analyser version would have collided with the stored row.
+2. §9: code computes `delta` and the verdict from the first and last recordings that have the metric, marks rows with gaps `partial: true`, adds the verdict `unavailable` for a metric present in fewer than two recordings, and reports `analyser_version_mismatch` beside `config_mismatch` (`storage/comparison.py`); spec said consecutive and first-vs-current deltas with four verdicts and `config_mismatch` only.
+3. §12: code's `GET /analyses` returns blob-free summaries with `limit`/`offset` pagination (`storage/repo.py`, `list_analysis_summaries`); spec said "list" with no paging or summary rule.
+
+### Plan 4: API, auth and jobs (`docs/superpowers/plans/2026-10-04-plan-4-api-auth-jobs.md`)
+
+1. §8: code adds `analyses.source_sha256` (hash of the uploaded bytes, names the stored upload) and `jobs.file_name`, `jobs.source_sha256`, `jobs.recorded_at` (`storage/models.py`); spec said `analyses.content_sha256` only and jobs without file fields.
+2. §10: code runs jobs in a spawn-based `ProcessPoolExecutor` with `JOB_WORKERS` default 1, rebuilds the pool when a worker dies (`worker crashed: <reason>`) and answers 503 when it cannot (`backend/vocal_coach/jobs/runner.py`); spec said `ThreadPoolExecutor(max_workers=JOB_WORKERS, default 2)` with an in-process callback.
+3. §10 and §12: code adds `GET /api/jobs?status=&limit=` (`api/jobs.py`); spec had no jobs list.
+4. §10 and §12: code adds `POST /api/jobs/{id}/retry` returning 202 `{job_id}`, 404 foreign or missing, 409 not finished, 410 upload gone (`api/jobs.py`); spec had no retry endpoint (only "row visible in Library with retry" in §15).
+5. §10 and §12: code ends an SSE stream open longer than an hour with a `timeout {message}` event and opens one short DB session per poll (`jobs/events.py`); spec said the stream emits `stage`, `progress`, `done`, `error` only.
+6. §12: code adds `GET /api/analyses/{id}/raw/{kind}` for byte-stable `metrics` / `transcript` / `coaching` downloads (`api/analyses.py`); spec had none (JSONB reorders keys, so the UI cannot rebuild canonical bytes).
+7. §12 and §15: code's `DELETE /api/analyses/{id}` removes the upload once no analysis and no unfinished job references its `source_sha256`; the pipeline deletes it after a decode failure, keeps it after an infrastructure failure, and reports decode failures as `could not decode <file name>: not a supported audio/video file` (`api/analyses.py`, `pipeline.py`); spec said "delete analysis and cached files".
+8. §4 and §14: code adds `KEYCLOAK_JWKS_URL_OVERRIDE` so the backend container fetches JWKS over the compose network while `KEYCLOAK_ISSUER` stays the browser-visible URL (`settings.py`, `docker-compose.yml`); spec derived JWKS from the issuer only.
+9. §14: code runs Keycloak with `start-dev --import-realm` and ships two realm files selected by `KEYCLOAK_REALM_FILE` (`keycloak/realm-export.dev.json` with a demo user and the password grant, the default; `keycloak/realm-export.json` production-shaped), both with an audience mapper so tokens carry `aud: vocal-coach-web` (`docker-compose.yml`, `keycloak/`); spec said `start --import-realm` with one realm file.
+10. §3.1: code's backend image is Python 3.12 with a separate wheel-build stage (praat-parselmouth has no linux/aarch64 wheel) (`backend/Dockerfile`); spec said "python 3.11 + ffmpeg".
+
+### Plan 5: React UI (`docs/superpowers/plans/2026-10-04-plan-5-react-ui.md`)
+
+1. §13: code uses React 19, React Router 7, Tailwind v4, shadcn/ui and Recharts (`frontend/package.json`); spec said React 18. Nothing in the spec depends on 18.
+2. §17: code uses npm with a committed `package-lock.json` (`frontend/package.json`, `frontend/Dockerfile`); spec said pnpm (made formal by Plan 8 amendment 5).
+
+### Plan 6: LLM coaching (`docs/superpowers/plans/2026-10-04-plan-6-llm-coaching.md`)
+
+1. §11.2 says the OpenAI-compatible provider uses the `openai` SDK. This plan uses `httpx` directly (already a dependency, trivially mockable with `pytest-httpx`, no second HTTP stack). Wire format is identical (`POST {base_url}/chat/completions`, `GET {base_url}/models`).
+2. §11.2 says the Anthropic provider forces a single tool and sets `temperature 0`. Current Anthropic models (Opus 5.5, Sonnet 5.5, Fable 5.1) reject forced `tool_choice` and non-default `temperature` with HTTP 400. This plan uses structured outputs (`output_config.format` with the coaching JSON schema) and omits `temperature`; determinism comes from the strict schema, the fixed prompt, and the post-checks. Default model when `llm.model` is empty: `claude-opus-5-5`.
+3. §12: `POST /analyses/{id}/coach` returns the updated `AnalysisDetail` (200). When `llm.enabled` is false it returns 503 `{"detail": "coaching is not enabled on this server"}`; when the model is not allowed, 422.
+
+### Plan 7: Google Drive OAuth (`docs/superpowers/plans/2026-10-04-plan-7-drive-oauth.md`)
+
+1. §5 scope: `https://www.googleapis.com/auth/drive.readonly` plus `https://www.googleapis.com/auth/userinfo.email`, so `google_email` can be stored and shown in Settings (the spec's table already has the column).
+2. §12 `/me` gains `drive_configured: bool` (server has `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`); when false, `/drive/connect` and `/drive/files` return 503 `{"detail": "drive is not configured on this server"}` and the UI shows that text instead of a Connect button.
+3. §5 cache: the Drive download is cached as the original file; the derived 16 kHz WAV is NOT kept beside it (the pipeline already derives it per job in a temp work dir and deletes it). Cache hit = no download.
+4. §12 `POST /analyses` JSON body is `{"source": "drive", "file_ids": [...], "speaker_context": str | null, "llm": {"enabled": bool, "model": str | null}}`, 1 to 20 ids; response `{job_ids: [...]}` in the same order; a file id the user cannot read (404 at Google) → 404 `{"detail": "drive file <id> not found"}` and no jobs are created.
+
+### Plan 8: README and hardening (`docs/superpowers/plans/2026-10-05-plan-8-readme-hardening.md`)
+
+1. §9: a comparison row's verdict is `unchanged` when `abs(delta)` rounds to `0.0` at the metric's display precision (1 decimal; 2 for `modulation_depth`; 0 for counts; 3 for `*_fraction` metrics, i.e. 1 decimal of the displayed percent), regardless of `min_meaningful_change_pct`. `ComparisonResult` gains `file_names: list[str | null]`.
+2. §10: `jobs` gains `drive_file_id` and `drive_modified_time` so Drive jobs can be retried; `DELETE /api/jobs/{id}` dismisses a terminal job (404 for non-terminal or unknown).
+3. §5: cache files are removed when the last analysis referencing that Drive file is deleted; total cache size per server is capped by `CACHE_MAX_MB` (default 2048) with least-recently-used eviction before each download; `DRIVE_MAX_MB` (default = `MAX_UPLOAD_MB`) caps Drive downloads. `GET /drive/files` also returns folders (`is_folder: true`, `size: null`) so the browser can navigate.
+4. §14: the frontend image reads Keycloak settings at runtime from `/config.json` (generated by the nginx container entrypoint from `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID`), replacing the build-time `VITE_KEYCLOAK_*` args; the Vite dev server serves a static `public/config.json`.
+5. §17: Node version is 22 and the package manager is npm (not pnpm), matching what the project already uses; dependencies list reflects httpx-based providers (no `openai`, no `google-api-python-client`).

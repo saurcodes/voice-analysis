@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     job_workers: int = 1
     max_upload_mb: int = 500
+    cache_max_mb: int = 2048
+    drive_max_mb: int | None = None
     require_ffmpeg: bool = True
     openai_compat_api_key: str | None = None
     anthropic_api_key: str | None = None
@@ -41,6 +43,15 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * BYTES_PER_MB
+
+    @property
+    def cache_max_bytes(self) -> int:
+        return self.cache_max_mb * BYTES_PER_MB
+
+    @property
+    def drive_max_bytes(self) -> int:
+        """`DRIVE_MAX_MB` when set, else the same cap as uploads (`max_upload_bytes`)."""
+        return self.drive_max_mb * BYTES_PER_MB if self.drive_max_mb is not None else self.max_upload_bytes
 
     @property
     def drive_configured(self) -> bool:

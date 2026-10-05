@@ -213,6 +213,7 @@ def _jobs_for(ctx, sub="user-1"):
     ("notes.pdf", "application/pdf", "10"),
     ("Meeting notes", "application/vnd.google-apps.document", None),  # Google Doc: no extension, no size
     ("take.wav", "audio/wav", None),  # media name but Drive reports no size
+    ("Live Takes", "application/vnd.google-apps.folder", None),  # a folder id passed as a file id
 ])
 def test_drive_json_post_unsupported_file_is_415_with_zero_jobs(tmp_path, httpx_mock, name, mime_type, size):
     captured = []
@@ -260,6 +261,9 @@ def test_drive_json_post_runner_failure_mid_batch_fails_the_whole_batch(tmp_path
         def __init__(self):
             self.calls = 0
 
+        def available(self):
+            return True  # the pre-batch check passes; the pool only dies mid-batch
+
         def submit(self, req):
             self.calls += 1
             if self.calls > 1:
@@ -279,6 +283,23 @@ def test_drive_json_post_runner_failure_mid_batch_fails_the_whole_batch(tmp_path
         jobs = _jobs_for(ctx)
         assert len(jobs) == 2
         assert {(j.status, j.error) for j in jobs} == {("failed", "job runner unavailable")}
+
+
+def test_drive_json_post_runner_unavailable_before_batch_is_503_with_zero_jobs(tmp_path, httpx_mock):
+    """`available()` is checked after metadata/type/size checks but before any job row is created."""
+    captured = []
+    app, ctx = make_test_app(tmp_path, job_fn=_capturing_job_fn(captured), settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "tok"})
+        _mock_get_file(httpx_mock, "f1", name="one.wav", modified_time="2026-10-01T00:00:00.000Z")
+        app.state.runner.available = lambda: False
+
+        r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": ["f1"]})
+
+        assert r.status_code == 503
+        assert r.json()["detail"] == "job runner unavailable"
+        assert captured == [] and _jobs_for(ctx) == []
 
 
 def test_drive_json_post_422_detail_lists_messages_only(tmp_path):
@@ -371,10 +392,101 @@ def test_failed_job_is_visible(tmp_path):
         assert job["status"] == "failed" and job["error"] == "boom"
 
 
+def test_chunked_upload_with_no_content_length_over_cap_is_413_with_no_partial_file(tmp_path):
+    """Review Focus 2: a body with no `Content-Length` (so `_reject_if_declared_too_large`'s fast
+    path cannot fire) that exceeds the cap still gets a 413 from `_store_upload`'s own byte count,
+    and leaves no partial file (no `.part`/`.tmp`, no final upload) under `uploads/`."""
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn, max_upload_mb=1)
+    boundary = "testboundary123"
+    big = b"\0" * (1024 * 1024 + int(0.5 * 1024 * 1024))  # 1.5 MiB, over the 1 MiB cap
+    body = (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="big.wav"\r\n'
+        f"Content-Type: audio/wav\r\n\r\n"
+    ).encode() + big + f"\r\n--{boundary}--\r\n".encode()
+
+    def chunks():
+        step = 64 * 1024
+        for i in range(0, len(body), step):
+            yield body[i:i + step]
+
+    with TestClient(app) as client:
+        headers = {**ctx["auth"](), "content-type": f"multipart/form-data; boundary={boundary}"}
+        r = client.post("/api/analyses", content=chunks(), headers=headers)
+        assert "content-length" not in {k.lower() for k in r.request.headers}  # sanity: no declared size
+        assert r.status_code == 413
+        assert not list((tmp_path / "data" / "uploads").rglob("*"))
+
+
+def test_chunked_upload_over_cap_stops_reading_the_body_before_parsing_finishes(tmp_path):
+    """The body limit cuts a chunked upload off while `request.form()` is still spooling it: the
+    route reads no more than about cap + 1 MiB (multipart slack) of an 8 MiB body before the 413.
+    Driven through raw ASGI because TestClient reads a request body generator to the end up front."""
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn, max_upload_mb=1)
+    boundary = "testboundary123"
+    step = 64 * 1024
+    head = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="big.wav"\r\n'
+            f"Content-Type: audio/wav\r\n\r\n").encode()
+    total_chunks = 8 * 1024 * 1024 // step
+    sent = {"chunks": 0, "bytes": 0}
+    responses: list[dict] = []
+
+    async def receive():
+        index = sent["chunks"]
+        if index > total_chunks:
+            return {"type": "http.disconnect"}
+        body = head if index == 0 else b"\0" * step
+        sent["chunks"] += 1
+        sent["bytes"] += len(body)
+        return {"type": "http.request", "body": body, "more_body": index < total_chunks}
+
+    async def send(message):
+        responses.append(message)
+
+    with TestClient(app) as client:
+        headers = [(k.lower().encode(), v.encode()) for k, v in {
+            **ctx["auth"](), "content-type": f"multipart/form-data; boundary={boundary}"}.items()]
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/api/analyses", "raw_path": b"/api/analyses", "root_path": "",
+                 "query_string": b"", "headers": headers, "client": ("testclient", 50000),
+                 "server": ("testserver", 80)}
+        client.portal.call(app, scope, receive, send)
+
+    start = next(m for m in responses if m["type"] == "http.response.start")
+    assert start["status"] == 413
+    body = b"".join(m.get("body", b"") for m in responses if m["type"] == "http.response.body")
+    assert json.loads(body)["detail"] == "file too large (max 1 MB)"
+    cap = ctx["settings"].max_upload_bytes
+    assert sent["bytes"] <= cap + 1024 * 1024 + step  # stopped near the limit, not at the 8 MiB end
+    assert sent["chunks"] < total_chunks
+    assert not list((tmp_path / "data" / "uploads").rglob("*"))
+
+
+def test_upload_returns_503_before_storing_when_runner_unavailable(tmp_path):
+    class UnavailableRunner:
+        def available(self):
+            return False
+
+        def submit(self, req):
+            raise AssertionError("submit must not be called when the runner reports unavailable")
+
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        app.state.runner = UnavailableRunner()
+        r = _upload(client, ctx["auth"]())
+        assert r.status_code == 503 and r.json()["detail"] == "job runner unavailable"
+        assert _uploads(tmp_path) == []
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            assert repo.list_jobs(s, user.id) == []
+
+
 def test_upload_returns_503_and_fails_job_when_runner_unavailable(tmp_path):
     from vocal_coach.jobs.runner import RunnerUnavailable
 
     class DeadRunner:
+        def available(self):
+            return True  # the pre-check passes; submit() is what fails
+
         def submit(self, req):
             raise RunnerUnavailable("job runner unavailable")
 
@@ -410,6 +522,83 @@ def test_delete_keeps_upload_while_another_analysis_uses_it(tmp_path):
         assert len(_uploads(tmp_path)) == 1
         assert client.delete(f"/api/analyses/{second.id}", headers=ctx["auth"]()).status_code == 204
         assert _uploads(tmp_path) == []
+
+
+def fake_drive_job_fn(req, database_url, config_path):
+    """Pretend the pipeline ran for a Drive job: writes the cache file at its cache path (so cache
+    cleanup on delete has something real to remove) and stores an analysis row referencing
+    `drive_file_id` (Drive-sourced analyses carry no `source_sha256`)."""
+    import hashlib
+
+    req.source_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = f"cached:{req.drive_file_id}:{req.drive_modified_time}".encode()
+    req.source_path.write_bytes(payload)
+    engine = make_engine(database_url)
+    with make_session_factory(engine)() as s:
+        row = repo.create_analysis(
+            s, req.user_id, file_name=req.file_name, drive_file_id=req.drive_file_id,
+            content_sha256=hashlib.sha256(payload).hexdigest(), source_sha256=None,
+            recorded_at=req.recorded_at, analyser_version="0.1.0", config_hash="sha256:test",
+            metrics_json=fake_metrics(), transcript_json=fake_transcript(), speaker_context=req.speaker_context,
+        )
+        repo.update_job(s, req.job_id, status="done", stage="done", progress_pct=100, analysis_id=row.id)
+    engine.dispose()
+
+
+def test_delete_removes_cache_files_once_the_last_drive_analysis_referencing_them_is_gone(tmp_path, httpx_mock):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_drive_job_fn, settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "tok"})
+        _mock_get_file(httpx_mock, "f1", name="one.wav", modified_time="2026-10-01T00:00:00.000Z")
+
+        job_id = client.post("/api/analyses", headers=ctx["auth"](),
+                             json={"source": "drive", "file_ids": ["f1"]}).json()["job_ids"][0]
+        first = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).json()["analysis_id"]
+
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            cache_files = list((tmp_path / "data" / "cache" / str(user.id)).glob("f1__*"))
+        assert len(cache_files) == 1
+        cached = cache_files[0]
+
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            src = repo.get_analysis(s, user.id, uuid.UUID(first))
+            second = repo.create_analysis(
+                s, user.id, file_name="two.wav", drive_file_id="f1", content_sha256="0" * 64,
+                source_sha256=None, recorded_at=src.recorded_at, analyser_version="0.1.0",
+                config_hash="sha256:other", metrics_json=src.metrics_json)
+
+        assert client.delete(f"/api/analyses/{first}", headers=ctx["auth"]()).status_code == 204
+        assert cached.exists()  # another analysis still references drive_file_id f1
+
+        assert client.delete(f"/api/analyses/{second.id}", headers=ctx["auth"]()).status_code == 204
+        assert not cached.exists()
+
+
+def test_delete_keeps_cache_files_while_an_unfinished_drive_job_still_needs_them(tmp_path, httpx_mock):
+    """Deleting the last Drive analysis of f1 must not remove its cached download while a queued job
+    for f1 is still waiting to read it."""
+    app, ctx = make_test_app(tmp_path, job_fn=fake_drive_job_fn, settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "tok"})
+        _mock_get_file(httpx_mock, "f1", name="one.wav", modified_time="2026-10-01T00:00:00.000Z")
+
+        job_id = client.post("/api/analyses", headers=ctx["auth"](),
+                             json={"source": "drive", "file_ids": ["f1"]}).json()["job_ids"][0]
+        analysis_id = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).json()["analysis_id"]
+
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            cache_files = list((tmp_path / "data" / "cache" / str(user.id)).glob("f1__*"))
+            repo.create_job(s, user.id, file_name="one.wav", drive_file_id="f1",
+                            drive_modified_time="2026-10-01T00:00:00.000Z")  # queued, never run
+        assert len(cache_files) == 1
+
+        assert client.delete(f"/api/analyses/{analysis_id}", headers=ctx["auth"]()).status_code == 204
+        assert cache_files[0].exists()
 
 
 @requires_ffmpeg

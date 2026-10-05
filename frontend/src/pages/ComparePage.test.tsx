@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { Route, Routes } from "react-router";
 import { server } from "@/test/msw";
 import { renderWithProviders } from "@/test/render";
-import { comparison, summary } from "@/test/fixtures";
+import { comparison } from "@/test/fixtures";
 import { ComparePage } from "./ComparePage";
 
 function renderPage(route: string) {
@@ -57,7 +57,6 @@ test("a single id never issues a GET /api/comparisons request", async () => {
 
 test("two ids loads the comparison: mismatch banner, grouped table, and default 4 trend charts", async () => {
   const data = comparison();
-  server.use(http.get("/api/analyses", () => HttpResponse.json([summary(), summary({ id: data.analysis_ids[1] })])));
 
   renderPage(`/compare?ids=${data.analysis_ids.join(",")}`);
 
@@ -84,7 +83,6 @@ test("two ids loads the comparison: mismatch banner, grouped table, and default 
 
 test("picking another path adds a chart", async () => {
   const data = comparison();
-  server.use(http.get("/api/analyses", () => HttpResponse.json([summary(), summary({ id: data.analysis_ids[1] })])));
 
   renderPage(`/compare?ids=${data.analysis_ids.join(",")}`);
 
@@ -105,7 +103,6 @@ test("picking another path adds a chart", async () => {
 test("both mismatch banners show when the comparison has both flags set", async () => {
   const data = { ...comparison(), config_mismatch: true };
   server.use(http.get("/api/comparisons", () => HttpResponse.json(data)));
-  server.use(http.get("/api/analyses", () => HttpResponse.json([summary(), summary({ id: data.analysis_ids[1] })])));
 
   renderPage(`/compare?ids=${data.analysis_ids.join(",")}`);
 
@@ -130,9 +127,22 @@ test("a 404 from the comparisons endpoint shows the not-found message", async ()
   expect(screen.getByRole("link", { name: "Back to Library" })).toHaveAttribute("href", "/");
 });
 
+test("a null slot in file_names falls back to the id prefix", async () => {
+  const data = comparison();
+  const withNames = { ...data, file_names: ["Opening pitch.wav", null] };
+  server.use(http.get("/api/comparisons", () => HttpResponse.json(withNames)));
+
+  renderPage(`/compare?ids=${data.analysis_ids.join(",")}`);
+
+  await waitFor(() => expect(screen.getByText("Compare recordings")).toBeInTheDocument());
+
+  const items = within(screen.getByRole("list")).getAllByRole("listitem");
+  expect(items[0]).toHaveTextContent("Opening pitch.wav");
+  expect(items[1]).toHaveTextContent(data.analysis_ids[1].slice(0, 8));
+});
+
 test("header lists recordings with a colour swatch and formatted date, in request order", async () => {
   const data = comparison();
-  server.use(http.get("/api/analyses", () => HttpResponse.json([summary(), summary({ id: data.analysis_ids[1] })])));
 
   renderPage(`/compare?ids=${data.analysis_ids.join(",")}`);
 

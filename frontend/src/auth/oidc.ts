@@ -1,9 +1,6 @@
 import { WebStorageStateStore } from "oidc-client-ts";
-import type { AuthProviderProps } from "react-oidc-context";
-
-const KEYCLOAK_URL = import.meta.env.VITE_KEYCLOAK_URL ?? "http://localhost:8080";
-const KEYCLOAK_REALM = import.meta.env.VITE_KEYCLOAK_REALM ?? "vocal-coach";
-const KEYCLOAK_CLIENT_ID = import.meta.env.VITE_KEYCLOAK_CLIENT_ID ?? "vocal-coach-web";
+import type { AuthProviderNoUserManagerProps } from "react-oidc-context";
+import type { AppConfig } from "@/config";
 
 /**
  * Strips the OIDC `code`/`state` query params left by the authorization redirect, leaving
@@ -20,14 +17,22 @@ function onSigninCallback(): void {
   window.history.replaceState({}, document.title, window.location.pathname);
 }
 
-export const oidcConfig: AuthProviderProps = {
-  authority: `${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}`,
-  client_id: KEYCLOAK_CLIENT_ID,
-  redirect_uri: `${window.location.origin}/`,
-  post_logout_redirect_uri: `${window.location.origin}/login`,
-  response_type: "code",
-  scope: "openid profile email",
-  automaticSilentRenew: true,
-  userStore: new WebStorageStateStore({ store: window.sessionStorage }),
-  onSigninCallback,
-};
+/**
+ * Builds the react-oidc-context AuthProvider config from the runtime AppConfig loaded from
+ * /config.json (src/config.ts), rather than from import.meta.env.VITE_KEYCLOAK_* build-time
+ * values: one built frontend image can then be redeployed against any Keycloak instance
+ * (see frontend/docker-entrypoint.sh).
+ */
+export function buildOidcConfig(cfg: AppConfig): AuthProviderNoUserManagerProps {
+  return {
+    authority: `${cfg.keycloakUrl}/realms/${cfg.keycloakRealm}`,
+    client_id: cfg.keycloakClientId,
+    redirect_uri: `${window.location.origin}/`,
+    post_logout_redirect_uri: `${window.location.origin}/login`,
+    response_type: "code",
+    scope: "openid profile email",
+    automaticSilentRenew: true,
+    userStore: new WebStorageStateStore({ store: window.sessionStorage }),
+    onSigninCallback,
+  };
+}

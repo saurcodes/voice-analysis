@@ -188,7 +188,8 @@ export interface paths {
         get: operations["get_job_api_jobs__job_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Dismiss Job */
+        delete: operations["dismiss_job_api_jobs__job_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -494,6 +495,8 @@ export interface components {
             analysis_ids: string[];
             /** Config Mismatch */
             config_mismatch: boolean;
+            /** File Names */
+            file_names: (string | null)[];
             /** Recorded At */
             recorded_at: string[];
             /** Rows */
@@ -569,6 +572,8 @@ export interface components {
         DriveFileOut: {
             /** Id */
             id: string;
+            /** Is Folder */
+            is_folder: boolean;
             /** Mime Type */
             mime_type: string;
             /** Modified Time */
@@ -1283,7 +1288,7 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description redirect to the frontend settings page */
+            /** @description redirect to /settings?drive=connected, cancelled or error */
             303: {
                 headers: {
                     [name: string]: unknown;
@@ -1305,13 +1310,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
-            };
-            /** @description Google returned an error */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };
@@ -1489,6 +1487,42 @@ export interface operations {
             };
         };
     };
+    dismiss_job_api_jobs__job_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description job not found, not owned by the caller, or not yet finished */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     job_event_stream_api_jobs__job_id__events_get: {
         parameters: {
             query?: never;
@@ -1547,15 +1581,22 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description job is not finished */
+            /** @description job is not finished, or Drive is not connected */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description the uploaded file is no longer stored */
+            /** @description the uploaded file, or the Drive file, is no longer available */
             410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description the Drive file is now a folder */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1570,7 +1611,14 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description job runner unavailable */
+            /** @description Google Drive returned an error */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description job runner unavailable, or Drive is not configured */
             503: {
                 headers: {
                     [name: string]: unknown;

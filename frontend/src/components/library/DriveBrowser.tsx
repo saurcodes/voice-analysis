@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { FolderOpen, WarningCircle } from "@phosphor-icons/react";
+import { Folder, FolderOpen, WarningCircle } from "@phosphor-icons/react";
 import { ApiError } from "@/api/client";
 import { useDriveFiles } from "@/api/hooks";
 import type { components } from "@/api/types";
@@ -11,8 +11,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 type DriveFileOut = components["schemas"]["DriveFileOut"];
+
+interface Crumb {
+  id: string;
+  name: string;
+}
+
+const ROOT_CRUMB: Crumb = { id: "", name: "My Drive" };
 
 const COLUMNS = ["Select", "Name", "Modified", "Size"] as const;
 
@@ -54,14 +62,30 @@ function DriveTableHeader() {
  */
 export function DriveBrowser({ selected, onChange, enabled = true }: DriveBrowserProps) {
   const [folderInput, setFolderInput] = useState("");
-  const [activeFolder, setActiveFolder] = useState("");
+  const [breadcrumb, setBreadcrumb] = useState<Crumb[]>([ROOT_CRUMB]);
+  const activeFolder = breadcrumb[breadcrumb.length - 1].id;
   const filesQuery = useDriveFiles(activeFolder || "root", { enabled });
 
   const selectedIds = new Set(selected.map((file) => file.id));
-  const files = filesQuery.data ?? [];
+  const files: DriveFileOut[] = filesQuery.data ?? [];
+  // Folders first, so the browsable structure reads before the selectable files.
+  const orderedFiles = [...files.filter((f) => f.is_folder), ...files.filter((f) => !f.is_folder)];
 
+  /** The manual "Folder id" input is a power-user override: it jumps straight to an arbitrary
+   * folder id without knowing its name, so the breadcrumb after it can only show the id. */
   function browse() {
-    setActiveFolder(folderInput.trim());
+    const id = folderInput.trim();
+    setBreadcrumb(id ? [ROOT_CRUMB, { id, name: id }] : [ROOT_CRUMB]);
+  }
+
+  function navigateIntoFolder(folder: DriveFileOut) {
+    setBreadcrumb((prev) => [...prev, { id: folder.id, name: folder.name }]);
+    setFolderInput("");
+  }
+
+  function navigateToCrumb(index: number) {
+    setBreadcrumb((prev) => prev.slice(0, index + 1));
+    setFolderInput("");
   }
 
   function toggle(file: DriveFileOut) {
@@ -74,6 +98,34 @@ export function DriveBrowser({ selected, onChange, enabled = true }: DriveBrowse
 
   return (
     <div className="flex flex-col gap-3">
+      <nav aria-label="Drive folder" className="flex flex-wrap items-center gap-1 text-sm">
+        {breadcrumb.map((crumb, i) => {
+          const isCurrent = i === breadcrumb.length - 1;
+          return (
+            <span key={`${crumb.id}-${i}`} className="flex items-center gap-1">
+              {i > 0 && (
+                <span className="text-muted-foreground" aria-hidden="true">
+                  /
+                </span>
+              )}
+              <button
+                type="button"
+                className={cn(
+                  "rounded-sm",
+                  isCurrent
+                    ? "font-medium text-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:underline",
+                )}
+                onClick={() => navigateToCrumb(i)}
+                disabled={isCurrent}
+              >
+                {crumb.name}
+              </button>
+            </span>
+          );
+        })}
+      </nav>
+
       <div className="flex items-end gap-2">
         <div className="flex flex-1 flex-col gap-2">
           <Label htmlFor="drive-folder-id">Folder id</Label>
@@ -126,26 +178,46 @@ export function DriveBrowser({ selected, onChange, enabled = true }: DriveBrowse
         <Table>
           <DriveTableHeader />
           <TableBody>
-            {files.map((file) => (
-              <TableRow key={file.id} data-state={selectedIds.has(file.id) ? "selected" : undefined}>
-                <TableCell>
-                  <Checkbox
-                    checked={selectedIds.has(file.id)}
-                    onCheckedChange={() => toggle(file)}
-                    aria-label={`Select ${file.name}`}
-                  />
-                </TableCell>
-                <TableCell className="max-w-48 truncate font-medium">{file.name}</TableCell>
-                <TableCell>{formatDateTime(file.modified_time)}</TableCell>
-                <TableCell>
-                  {file.size === null ? (
-                    <span className="text-muted-foreground">{formatSize(file.size)}</span>
-                  ) : (
-                    <span className="num text-muted-foreground">{formatSize(file.size)}</span>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
+            {orderedFiles.map((file) =>
+              file.is_folder ? (
+                <TableRow key={file.id}>
+                  <TableCell />
+                  <TableCell className="max-w-48 font-medium">
+                    <button
+                      type="button"
+                      className="flex items-center gap-1.5 truncate hover:underline"
+                      onClick={() => navigateIntoFolder(file)}
+                    >
+                      <Folder weight="regular" className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      <span className="truncate">{file.name}</span>
+                    </button>
+                  </TableCell>
+                  <TableCell>{formatDateTime(file.modified_time)}</TableCell>
+                  <TableCell>
+                    <span className="text-muted-foreground">-</span>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                <TableRow key={file.id} data-state={selectedIds.has(file.id) ? "selected" : undefined}>
+                  <TableCell>
+                    <Checkbox
+                      checked={selectedIds.has(file.id)}
+                      onCheckedChange={() => toggle(file)}
+                      aria-label={`Select ${file.name}`}
+                    />
+                  </TableCell>
+                  <TableCell className="max-w-48 truncate font-medium">{file.name}</TableCell>
+                  <TableCell>{formatDateTime(file.modified_time)}</TableCell>
+                  <TableCell>
+                    {file.size === null ? (
+                      <span className="text-muted-foreground">{formatSize(file.size)}</span>
+                    ) : (
+                      <span className="num text-muted-foreground">{formatSize(file.size)}</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ),
+            )}
           </TableBody>
         </Table>
       )}

@@ -6,6 +6,7 @@ Every writer leaves the session usable: a failed commit is rolled back before th
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -206,6 +207,84 @@ def count_source_refs(session: Session, user_id: uuid.UUID, source_sha256: str) 
     return int(analyses) + int(jobs)  # COUNT(*) is never NULL
 
 
+def count_drive_refs(session: Session, user_id: uuid.UUID, drive_file_id: str) -> int:
+    """How many things still need this Drive file's cached download: the user's analyses that
+    reference it plus their unfinished (queued or running) jobs for it. Zero means its cached
+    download(s) can be removed (`vocal_coach.drive.cache.remove_for_file`)."""
+    analyses = session.scalar(select(func.count()).select_from(Analysis).where(
+        Analysis.user_id == user_id, Analysis.drive_file_id == drive_file_id))
+    jobs = session.scalar(select(func.count()).select_from(Job).where(
+        Job.user_id == user_id, Job.drive_file_id == drive_file_id, Job.status.not_in(TERMINAL_STATUSES)))
+    return int(analyses) + int(jobs)  # COUNT(*) is never NULL
+
+
+def _locking_enabled(session: Session) -> bool:
+    """Postgres row-locks taken with `SELECT ... FOR UPDATE` are what make the delete-vs-retry
+    serialisation below work; SQLite has no row locking (and the tests that run against it are
+    single-threaded), so callers skip the lock there."""
+    return session.bind.dialect.name != "sqlite"
+
+
+def _lock_analyses_sharing(session: Session, user_id: uuid.UUID, column, value) -> None:
+    """Takes `SELECT ... FOR UPDATE` on the user's analyses rows where `column == value`, skipped on
+    SQLite. Shared by `lock_source_refs` and `delete_analysis_and_count_refs`'s own locking of the
+    same two columns (`source_sha256`, `drive_file_id`)."""
+    if not _locking_enabled(session):
+        return
+    session.execute(select(Analysis.id).where(Analysis.user_id == user_id, column == value).with_for_update())
+
+
+def lock_source_refs(session: Session, user_id: uuid.UUID, source_sha256: str) -> None:
+    """Serialises a retry against a concurrent delete of an analysis made from the same upload; the
+    caller checks `paths.find_upload` after this, inside the same transaction."""
+    _lock_analyses_sharing(session, user_id, Analysis.source_sha256, source_sha256)
+
+
+def delete_analysis_and_count_refs(
+    session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID, source_sha256: str | None,
+    drive_file_id: str | None = None, *,
+    on_unreferenced: Callable[[], None] | None = None,
+    on_drive_unreferenced: Callable[[], None] | None = None,
+) -> tuple[bool, int, int]:
+    """Delete one analysis and, in the same transaction, count what still references its upload
+    (`source_sha256`) and its Drive source (`drive_file_id`).
+
+    Doing this under one transaction (instead of `delete_analysis` then separate `count_source_refs`/
+    `count_drive_refs` calls, which used to commit and release in between) closes a race with a
+    concurrent retry that creates a new job for the same upload: on Postgres, the user's analyses rows
+    sharing `source_sha256` (and, separately, those sharing `drive_file_id`) are locked with
+    `SELECT ... FOR UPDATE` before the delete and the counts, so a concurrent transaction touching
+    those same rows (another delete of an analysis made from the same bytes or the same Drive file, or
+    a retry taking the same lock via `lock_source_refs`) serialises against this one rather than
+    interleaving with it. SQLite has no row locking (and the tests that run against it are
+    single-threaded), so the locks are skipped there.
+
+    `on_unreferenced` (called when `source_sha256` is set and the post-delete count is zero) and
+    `on_drive_unreferenced` (same, for `drive_file_id`) run BEFORE the commit, while the lock is still
+    held, so the upload file (or Drive cache entry) is removed before the row that made it
+    unreferenced is visible to anyone else. If a callback raises, the transaction is rolled back (the
+    delete is not committed) and the error is re-raised.
+    """
+    if source_sha256 is not None:
+        _lock_analyses_sharing(session, user_id, Analysis.source_sha256, source_sha256)
+    if drive_file_id is not None:
+        _lock_analyses_sharing(session, user_id, Analysis.drive_file_id, drive_file_id)
+    result = session.execute(delete(Analysis).where(Analysis.user_id == user_id, Analysis.id == analysis_id))
+    deleted = result.rowcount == ROWS_PER_ID
+    refs = count_source_refs(session, user_id, source_sha256) if source_sha256 else 0
+    drive_refs = count_drive_refs(session, user_id, drive_file_id) if drive_file_id else 0
+    try:
+        if source_sha256 is not None and not refs and on_unreferenced is not None:
+            on_unreferenced()
+        if drive_file_id is not None and not drive_refs and on_drive_unreferenced is not None:
+            on_drive_unreferenced()
+    except Exception:
+        session.rollback()
+        raise
+    _commit(session)
+    return deleted, refs, drive_refs
+
+
 def previous_analysis(
     session: Session, user_id: uuid.UUID, *, before: datetime, exclude_id: uuid.UUID,
 ) -> Analysis | None:
@@ -252,9 +331,11 @@ def set_coaching(
 
 def create_job(session: Session, user_id: uuid.UUID, *, file_name: str | None = None,
                source_sha256: str | None = None, recorded_at: datetime | None = None,
-               stage: str = FIRST_JOB_STAGE) -> Job:
+               stage: str = FIRST_JOB_STAGE, drive_file_id: str | None = None,
+               drive_modified_time: str | None = None) -> Job:
     job = Job(user_id=user_id, status="queued", stage=stage, progress_pct=PROGRESS_MIN,
-              file_name=file_name, source_sha256=source_sha256, recorded_at=recorded_at)
+              file_name=file_name, source_sha256=source_sha256, recorded_at=recorded_at,
+              drive_file_id=drive_file_id, drive_modified_time=drive_modified_time)
     session.add(job)
     _commit(session)
     return job
@@ -277,6 +358,17 @@ def update_job(session: Session, job_id: uuid.UUID, **fields) -> Job | None:
         setattr(job, k, v)
     _commit(session)
     return job
+
+
+def delete_job(session: Session, user_id: uuid.UUID, job_id: uuid.UUID) -> bool:
+    """Dismiss a job: deletes it only when it belongs to `user_id` and has finished (`done`/`failed`).
+    A non-terminal or unknown-or-foreign job is left alone and the caller gets False either way, so
+    the API cannot distinguish "not yours" from "not finished" from "does not exist"."""
+    result = session.execute(
+        delete(Job).where(Job.user_id == user_id, Job.id == job_id, Job.status.in_(TERMINAL_STATUSES))
+    )
+    _commit(session)
+    return result.rowcount == ROWS_PER_ID
 
 
 def list_jobs(session: Session, user_id: uuid.UUID, *, status: str | None = None,

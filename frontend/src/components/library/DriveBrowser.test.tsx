@@ -93,6 +93,42 @@ test("a null size renders a dash without the numeric styling class", async () =>
   expect(dash).not.toHaveClass("num");
 });
 
+test("folder rows render first, have no checkbox, and clicking one navigates in and builds a breadcrumb", async () => {
+  server.use(
+    http.get("/api/drive/files", ({ request }) => {
+      const folderId = new URL(request.url).searchParams.get("folder_id");
+      if (folderId === "folder-recordings") {
+        return HttpResponse.json([driveFile({ id: "drive-file-0003", name: "inside.wav" })]);
+      }
+      return HttpResponse.json([
+        driveFile({ id: "folder-recordings", name: "Recordings", is_folder: true, size: null }),
+        driveFile(),
+      ]);
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<Harness />);
+
+  await screen.findByText("Recordings");
+  expect(screen.queryByRole("checkbox", { name: "Select Recordings" })).not.toBeInTheDocument();
+  // Folders render before files: the first row in the table is the folder.
+  const firstRow = screen.getAllByRole("row")[1];
+  expect(within(firstRow).getByText("Recordings")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Recordings" }));
+
+  await screen.findByText("inside.wav");
+  expect(screen.queryByText("pitch-practice.m4a")).not.toBeInTheDocument();
+
+  const breadcrumb = screen.getByRole("navigation", { name: "Drive folder" });
+  expect(within(breadcrumb).getByText("My Drive")).toBeInTheDocument();
+  expect(within(breadcrumb).getByText("Recordings")).toBeInTheDocument();
+
+  await user.click(within(breadcrumb).getByRole("button", { name: "My Drive" }));
+  await screen.findByText("pitch-practice.m4a");
+  expect(screen.queryByText("inside.wav")).not.toBeInTheDocument();
+});
+
 test("a selection made in one folder survives browsing into another", async () => {
   const user = userEvent.setup();
   renderWithProviders(<Harness />);

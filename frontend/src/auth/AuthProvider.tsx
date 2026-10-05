@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AuthProvider as OidcAuthProvider, hasAuthParams, useAuth } from "react-oidc-context";
+import type { AuthProviderNoUserManagerProps } from "react-oidc-context";
 import type { User } from "oidc-client-ts";
 import { useNavigate } from "react-router";
-import { oidcConfig } from "./oidc";
+import { buildOidcConfig } from "./oidc";
+import { ConfigContext } from "./ConfigContext";
 import { AuthContext, TOKEN_SKEW_S, type AuthState, type AuthUser } from "./context";
 
 function deriveUser(profile: { name?: string; preferred_username?: string; email?: string } | undefined): AuthUser | null {
@@ -118,15 +120,37 @@ function AuthBridge({ children }: { children: ReactNode }) {
 }
 
 /**
- * Wraps react-oidc-context's own AuthProvider (Keycloak OIDC config from src/auth/oidc.ts)
- * and exposes the app-level AuthState shape via useAuthState(). Every consumer written
- * against useAuthState() (RequireAuth, UserMenu, LoginPage, SettingsPage) is unaffected by
- * what's underneath. Must be mounted under BrowserRouter (App.tsx does this):
- * SigninCallbackRedirect calls useNavigate().
+ * Wraps react-oidc-context's own AuthProvider and exposes the app-level AuthState shape via
+ * useAuthState(). Every consumer written against useAuthState() (RequireAuth, UserMenu,
+ * LoginPage, SettingsPage) is unaffected by what's underneath. Must be mounted under
+ * BrowserRouter (App.tsx does this): SigninCallbackRedirect calls useNavigate().
+ *
+ * The Keycloak settings come from one of two places:
+ *   - an explicit `oidcConfig` prop (tests, or any other direct caller);
+ *   - otherwise, the runtime AppConfig provided via ConfigContext, built into an
+ *     oidc-client-ts config with buildOidcConfig() (src/auth/oidc.ts).
+ * App.tsx mounts `<AuthProvider>` with no props, so the config can't be threaded through as a
+ * required prop there; src/bootstrap.tsx wraps App in a ConfigContext.Provider after loading
+ * /config.json instead.
  */
-export function AuthProvider({ children }: { children: ReactNode }) {
+export function AuthProvider({
+  children,
+  oidcConfig,
+}: {
+  children: ReactNode;
+  oidcConfig?: AuthProviderNoUserManagerProps;
+}) {
+  const config = useContext(ConfigContext);
+  const resolvedOidcConfig = oidcConfig ?? (config ? buildOidcConfig(config) : null);
+
+  if (!resolvedOidcConfig) {
+    throw new Error(
+      "AuthProvider requires either an oidcConfig prop or a ConfigContext value (see src/bootstrap.tsx)",
+    );
+  }
+
   return (
-    <OidcAuthProvider {...oidcConfig}>
+    <OidcAuthProvider {...resolvedOidcConfig}>
       <AuthBridge>
         <SigninCallbackRedirect>{children}</SigninCallbackRedirect>
       </AuthBridge>

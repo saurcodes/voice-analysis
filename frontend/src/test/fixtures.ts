@@ -24,6 +24,7 @@ export function driveFile(overrides: Partial<DriveFileOut> = {}): DriveFileOut {
     mime_type: "audio/mp4",
     modified_time: "2026-09-30T09:15:00Z",
     size: 2_400_000,
+    is_folder: false,
     ...overrides,
   };
 }
@@ -433,6 +434,7 @@ export function comparison(): ComparisonResult {
   return {
     analysis_ids: ids,
     recorded_at: recordedAt,
+    file_names: ["practice-run.wav", "practice-run.wav"],
     config_mismatch: false,
     analyser_version_mismatch: true,
     rows: [

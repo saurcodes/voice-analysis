@@ -18,6 +18,11 @@ export interface UploadFields {
 export interface UploadOptions {
   getToken: () => Promise<string>;
   onProgress?: (pct: number) => void;
+  /** Lets a caller cancel an in-flight upload (e.g. a per-row Cancel button). Aborting the
+   * underlying XHR rejects with ApiError(0, "upload cancelled") rather than the generic
+   * "Network error" an onerror would produce, so callers can tell a cancel apart from a real
+   * network failure. */
+  signal?: AbortSignal;
 }
 
 export type UploadResult = components["schemas"]["JobIds"];
@@ -52,11 +57,22 @@ function buildForm(file: File, fields: UploadFields): FormData {
 export function uploadAnalysis(
   file: File,
   fields: UploadFields,
-  { getToken, onProgress }: UploadOptions,
+  { getToken, onProgress, signal }: UploadOptions,
 ): Promise<UploadResult> {
+  if (signal?.aborted) {
+    return Promise.reject(new ApiError(0, "upload cancelled"));
+  }
+
   return getToken().then(
     (token) =>
       new Promise<UploadResult>((resolve, reject) => {
+        // A cancel can land while getToken() is still awaiting; signal.addEventListener below
+        // (which drives xhr.abort() for a cancel that arrives after this point) isn't wired up
+        // yet, so re-check here before doing anything with the XHR.
+        if (signal?.aborted) {
+          reject(new ApiError(0, "upload cancelled"));
+          return;
+        }
         const form = buildForm(file, fields);
         const xhr = new XMLHttpRequest();
         xhr.open("POST", "/api/analyses");
@@ -85,6 +101,14 @@ export function uploadAnalysis(
         xhr.onerror = () => {
           reject(new ApiError(0, "Network error"));
         };
+
+        xhr.onabort = () => {
+          reject(new ApiError(0, "upload cancelled"));
+        };
+
+        if (signal) {
+          signal.addEventListener("abort", () => xhr.abort(), { once: true });
+        }
 
         xhr.send(form);
       }),

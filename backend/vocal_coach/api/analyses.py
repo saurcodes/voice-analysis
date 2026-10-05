@@ -1,10 +1,10 @@
 """Upload, list, detail, raw download and delete for a user's analyses.
 
-NOTE: `Content-Length` is checked before `request.form()` so a declared-oversized upload is
-rejected without reading the body, and the post-parse byte count in `_store_upload` remains the
-backstop for chunked requests with no `Content-Length`. Starlette's `request.form()` still
-buffers the whole multipart body to a spooled temp file before we ever see it, so this is not
-true incremental/streaming multipart parsing — that's follow-up hardening (ledgered for Plan 8).
+Upload size is enforced in three places: a declared `Content-Length` over the cap is rejected
+before the body is read; the request's ASGI receive is wrapped so a body (chunked, with no
+`Content-Length`) that grows past the cap plus some multipart slack is cut off with a 413 while
+Starlette's `request.form()` is still spooling it; and `_store_upload` counts the file part's
+exact bytes as the final check.
 """
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ from vocal_coach.drive import service as drive_service
 from vocal_coach.drive.client import DriveClient, DriveFile, MEDIA_EXTENSIONS as ALLOWED_EXTENSIONS
 from vocal_coach.drive.errors import DriveError
 from vocal_coach.pipeline import JobRequest
+from vocal_coach.settings import BYTES_PER_MB
 from vocal_coach.storage import paths, repo
 from vocal_coach.storage.repo import AnalysisSummary
 from vocal_coach.transcription.schema import Transcript
@@ -103,6 +104,31 @@ def _reject_if_declared_too_large(request: Request, max_bytes: int) -> None:
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"declared size exceeds {max_bytes} bytes")
 
 
+def _file_too_large(max_bytes: int) -> HTTPException:
+    return HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"file too large (max {max_bytes // BYTES_PER_MB} MB)")
+
+
+def _limit_request_body(request: Request, max_bytes: int) -> None:
+    """Makes the request body raise 413 once more than `max_bytes + UPLOAD_CHUNK_BYTES` bytes have
+    arrived (the slack covers multipart framing and the other form fields), so `request.form()`
+    cannot spool an unbounded chunked upload to disk before `_store_upload` gets to count it."""
+    limit = max_bytes + UPLOAD_CHUNK_BYTES
+    receive = request.receive
+    received = 0
+
+    async def limited_receive():
+        nonlocal received
+        message = await receive()
+        if message["type"] == "http.request":
+            received += len(message.get("body", b""))
+            if received > limit:
+                raise _file_too_large(max_bytes)
+        return message
+
+    # Starlette has no public hook for wrapping the body stream; this only affects this route's request.
+    request._receive = limited_receive
+
+
 def to_detail(row) -> AnalysisDetail:
     return AnalysisDetail(id=row.id, file_name=row.file_name, drive_file_id=row.drive_file_id,
                           recorded_at=row.recorded_at, analysed_at=row.analysed_at, analyser_version=row.analyser_version,
@@ -139,7 +165,7 @@ async def _store_upload(file: UploadFile, data_dir: Path, user_id: uuid.UUID, ma
             while chunk := await file.read(UPLOAD_CHUNK_BYTES):
                 size += len(chunk)
                 if size > max_bytes:
-                    raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"file exceeds {max_bytes} bytes")
+                    raise _file_too_large(max_bytes)
                 digest.update(chunk)
                 out.write(chunk)
     except BaseException:
@@ -159,6 +185,23 @@ async def _store_upload(file: UploadFile, data_dir: Path, user_id: uuid.UUID, ma
     else:
         tmp.replace(final)
     return final, sha, size
+
+
+def _create_upload_job(
+    session_factory, request: Request, user_id: uuid.UUID, *, file_name: str, source_sha256: str,
+    recorded_at: datetime, source_path: Path, speaker_context: str | None, llm_enabled: bool, llm_model: str | None,
+) -> uuid.UUID:
+    """Create the job row and hand it to the runner off the event loop (mirrors `/coach` in api/llm.py):
+    opens its own session so it is safe to run via `asyncio.to_thread` without sharing the request's
+    (not thread-safe) session."""
+    with session_factory() as session:
+        job = repo.create_job(session, user_id, file_name=file_name, source_sha256=source_sha256,
+                              recorded_at=recorded_at)
+        req = JobRequest(job_id=job.id, user_id=user_id, source_path=source_path, file_name=file_name,
+                         recorded_at=recorded_at, speaker_context=speaker_context,
+                         llm_enabled=llm_enabled, llm_model=llm_model, source_sha256=source_sha256)
+        submit_or_503(request, session, job.id, req)
+        return job.id
 
 
 # The route reads the body itself (multipart so it can 413 before parsing, or raw JSON for the Drive
@@ -216,16 +259,20 @@ async def _create_drive_analyses(request: Request, user: CurrentUser, session: S
         except DriveError as e:
             raise drive_http_error(e) from None
     for file in files:  # every file is checked before any job exists, so a bad one aborts the batch
-        if file.ext not in ALLOWED_EXTENSIONS or file.size is None:
+        if file.is_folder or file.ext not in ALLOWED_EXTENSIONS or file.size is None:
             raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"unsupported file type: {file.name}")
-        if file.size > settings.max_upload_bytes:
+        if file.size > settings.drive_max_bytes:
             raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"file too large: {file.name}")
+
+    if not request.app.state.runner.available():
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "job runner unavailable")
 
     job_ids: list[uuid.UUID] = []
     for file in files:
         recorded_at = datetime.fromisoformat(file.modified_time.replace("Z", "+00:00"))
         path = drive_cache.cache_path(settings.data_dir, user.id, file)
-        job = repo.create_job(session, user.id, file_name=file.name, source_sha256=None, recorded_at=recorded_at)
+        job = repo.create_job(session, user.id, file_name=file.name, source_sha256=None, recorded_at=recorded_at,
+                              drive_file_id=file.id, drive_modified_time=file.modified_time)
         req = JobRequest(job_id=job.id, user_id=user.id, source_path=path, file_name=file.name,
                          recorded_at=recorded_at, drive_file_id=file.id, drive_modified_time=file.modified_time,
                          speaker_context=body.speaker_context, llm_enabled=body.llm.enabled,
@@ -252,6 +299,7 @@ async def create_analysis(
     if content_type.startswith("application/json"):
         return await _create_drive_analyses(request, user, session)
     _reject_if_declared_too_large(request, request.app.state.settings.max_upload_bytes)
+    _limit_request_body(request, request.app.state.settings.max_upload_bytes)
     async with request.form() as form:  # closes the UploadFile's spooled temp file on exit, even on error
         file = form.get("file")
         if not isinstance(file, StarletteUploadFile):
@@ -266,15 +314,19 @@ async def create_analysis(
         ext = Path(file.filename or "").suffix.lower().lstrip(".")
         if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"unsupported file type .{ext}; allowed: {sorted(ALLOWED_EXTENSIONS)}")
+        if not request.app.state.runner.available():
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "job runner unavailable")
         settings = request.app.state.settings
         path, sha, _size = await _store_upload(file, settings.data_dir, user.id, settings.max_upload_bytes)
         file_name = Path(file.filename or "").name or path.name  # strip any client-side directories
-        job = repo.create_job(session, user.id, file_name=file_name, source_sha256=sha, recorded_at=recorded_at)
-        req = JobRequest(job_id=job.id, user_id=user.id, source_path=path, file_name=file_name,
-                         recorded_at=recorded_at, speaker_context=speaker_context,
-                         llm_enabled=llm_enabled, llm_model=llm_model, source_sha256=sha)
-        submit_or_503(request, session, job.id, req)
-        return JobIds(job_ids=[job.id])
+        # Off the event loop, like /coach: a fresh session for the worker thread, since the
+        # request's session is not thread-safe to share.
+        job_id = await asyncio.to_thread(
+            _create_upload_job, request.app.state.session_factory, request, user.id, file_name=file_name,
+            source_sha256=sha, recorded_at=recorded_at, source_path=path, speaker_context=speaker_context,
+            llm_enabled=llm_enabled, llm_model=llm_model,
+        )
+        return JobIds(job_ids=[job_id])
 
 
 @router.get("/analyses", response_model=list[AnalysisSummary])
@@ -317,9 +369,13 @@ def delete_analysis(analysis_id: uuid.UUID, request: Request, user: CurrentUser 
     if row is None:
         raise HTTPException(404, "analysis not found")
     source_sha = row.source_sha256  # the upload's name; content_sha256 is the extracted WAV's hash
-    repo.delete_analysis(session, user.id, analysis_id)
-    # Drive-sourced analyses have no source_sha256; the cached download is left in place here
-    # (bounded by Plan 8's cache cleanup), not removed on delete.
-    if source_sha and not repo.count_source_refs(session, user.id, source_sha):
-        paths.remove_upload(request.app.state.settings.data_dir, user.id, source_sha)
+    drive_file_id = row.drive_file_id
+    settings = request.app.state.settings
+    repo.delete_analysis_and_count_refs(
+        session, user.id, analysis_id, source_sha, drive_file_id,
+        on_unreferenced=lambda: paths.remove_upload(settings.data_dir, user.id, source_sha),
+        # Drive-sourced: once no analysis of this user's references the file any more, its cached
+        # download(s) are removed too (bounded by Plan 8's cache lifecycle).
+        on_drive_unreferenced=lambda: drive_cache.remove_for_file(settings.data_dir, user.id, drive_file_id),
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
