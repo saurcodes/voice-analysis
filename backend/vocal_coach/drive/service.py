@@ -8,7 +8,7 @@ from pathlib import Path
 from cryptography.fernet import Fernet
 from sqlalchemy.orm import Session
 
-from vocal_coach.drive import crypto, oauth
+from vocal_coach.drive import cache, crypto, oauth
 from vocal_coach.drive import state as oauth_state
 from vocal_coach.drive.client import DriveClient, DriveFile
 from vocal_coach.drive.errors import DriveError, DriveNotConfigured, DriveNotConnected
@@ -118,9 +118,9 @@ def download_for_job(
     """Downloads a Drive file into the job's cache path, unless it is already cached (a concurrent
     job for the same file id + modifiedTime already wrote it). Called from inside the worker, with
     its own session/settings. Any `DriveError` subclass propagates for the pipeline to translate
-    into a user-facing message."""
-    if dest.exists() and dest.stat().st_size > 0:
+    into a user-facing message, including `DriveError("drive file too large")` past the upload cap."""
+    if cache.is_cached(dest):
         return dest
     token = access_token_for(session, settings, user_id)
-    DriveClient(token).download(file_id, dest)
+    DriveClient(token).download(file_id, dest, max_bytes=settings.max_upload_bytes)
     return dest

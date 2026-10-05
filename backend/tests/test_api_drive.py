@@ -199,7 +199,7 @@ def test_callback_missing_code_or_state_returns_400(tmp_path):
         assert r.json()["detail"] == "invalid or expired state"
 
 
-def test_callback_replayed_code_is_502_with_plain_detail(tmp_path, httpx_mock):
+def test_callback_replayed_code_redirects_to_settings_error(tmp_path, httpx_mock):
     app, ctx = make_test_app(tmp_path, settings_overrides=_overrides())
     with TestClient(app, follow_redirects=False) as client:
         state_value = _connect_and_get_state(client, ctx)
@@ -207,8 +207,33 @@ def test_callback_replayed_code_is_502_with_plain_detail(tmp_path, httpx_mock):
 
         r = client.get("/api/drive/callback", params={"code": "already-used-code", "state": state_value})
 
-        assert r.status_code == 502
-        assert r.json()["detail"] == "google token error 400"
+        assert r.status_code == 303
+        assert r.headers["location"] == f"{FRONTEND}/settings?drive=error"
+        assert "max-age=0" in r.headers["set-cookie"].lower()  # cookie cleared on failure too
+
+
+def test_callback_missing_drive_scope_redirects_to_settings_error(tmp_path, httpx_mock):
+    app, ctx = make_test_app(tmp_path, settings_overrides=_overrides())
+    with TestClient(app, follow_redirects=False) as client:
+        me = client.get("/api/me", headers=ctx["auth"]()).json()
+        state_value = _connect_and_get_state(client, ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={
+            "refresh_token": "1//r", "access_token": "a", "scope": "https://www.googleapis.com/auth/userinfo.email"})
+
+        r = client.get("/api/drive/callback", params={"code": "auth-code", "state": state_value})
+
+        assert r.status_code == 303
+        assert r.headers["location"] == f"{FRONTEND}/settings?drive=error"
+        with ctx["session_factory"]() as session:
+            assert repo.get_drive_connection(session, uuid.UUID(me["id"])) is None
+
+
+def test_callback_other_google_error_redirects_to_settings_error(tmp_path):
+    app, ctx = make_test_app(tmp_path, settings_overrides=_overrides())
+    with TestClient(app, follow_redirects=False) as client:
+        r = client.get("/api/drive/callback", params={"error": "server_error"})
+        assert r.status_code == 303
+        assert r.headers["location"] == f"{FRONTEND}/settings?drive=error"
 
 
 def test_callback_access_denied_redirects_to_cancelled(tmp_path):

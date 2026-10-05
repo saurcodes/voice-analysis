@@ -97,7 +97,9 @@ class DriveClient:
             )
         return _file_from_json(data)
 
-    def download(self, file_id: str, dest: Path) -> Path:
+    def download(self, file_id: str, dest: Path, *, max_bytes: int | None = None) -> Path:
+        """Streams to a pid-named part file, then renames atomically. Over `max_bytes` the part
+        file is removed and `DriveError("drive file too large")` raised."""
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         part = dest.with_name(dest.name + f".{os.getpid()}.part")
@@ -111,8 +113,12 @@ class DriveClient:
                         headers=self._headers(),
                     ) as response:
                         self._raise_for_status(response, not_found=f"drive file {file_id} not found")
+                        written = 0
                         with open(part, "wb") as handle:
                             for chunk in response.iter_bytes():
+                                written += len(chunk)
+                                if max_bytes is not None and written > max_bytes:
+                                    raise DriveError("drive file too large")
                                 handle.write(chunk)
                 except (httpx.TimeoutException, httpx.TransportError) as exc:
                     raise DriveError("google drive connection error") from exc

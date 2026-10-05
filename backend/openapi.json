@@ -2734,7 +2734,7 @@
             "description": "Successful Response"
           },
           "303": {
-            "description": "redirect to the frontend settings page"
+            "description": "redirect to /settings?drive=connected, cancelled or error"
           },
           "400": {
             "description": "invalid or expired OAuth state"
@@ -2748,9 +2748,6 @@
               }
             },
             "description": "Validation Error"
-          },
-          "502": {
-            "description": "Google returned an error"
           }
         },
         "summary": "Callback",
@@ -3081,7 +3078,7 @@
             "description": "job is not finished"
           },
           "410": {
-            "description": "the uploaded file is no longer stored"
+            "description": "the uploaded file is no longer stored, or the job is Drive-sourced"
           },
           "422": {
             "content": {

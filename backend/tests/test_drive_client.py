@@ -263,5 +263,24 @@ def test_download_part_file_name_includes_pid(tmp_path, httpx_mock, monkeypatch)
     assert seen_names == [f"out.mp3.{os.getpid()}.part"]
 
 
+def test_download_over_max_bytes_raises_and_leaves_no_file(tmp_path, httpx_mock):
+    httpx_mock.add_response(url=f"{DRIVE_API}/f1?alt=media", stream=IteratorStream([b"a" * 6, b"b" * 6]))
+    dest = tmp_path / "out.m4a"
+
+    with pytest.raises(DriveError, match="drive file too large"):
+        _client().download("f1", dest, max_bytes=10)
+
+    assert not dest.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_download_at_max_bytes_succeeds(tmp_path, httpx_mock):
+    httpx_mock.add_response(url=f"{DRIVE_API}/f1?alt=media", content=b"a" * 10)
+    dest = tmp_path / "out.m4a"
+
+    assert _client().download("f1", dest, max_bytes=10) == dest
+    assert dest.read_bytes() == b"a" * 10
+
+
 def test_media_extensions_constant():
     assert MEDIA_EXTENSIONS == frozenset({"m4a", "mp3", "wav", "mov", "mp4"})

@@ -7,7 +7,7 @@ import re
 import uuid
 from pathlib import Path
 
-from vocal_coach.drive.client import DriveClient, DriveFile
+from vocal_coach.drive.client import DriveFile
 from vocal_coach.storage.paths import cache_dir
 
 _UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
@@ -23,11 +23,7 @@ def cache_path(data_dir: Path, user_id: uuid.UUID, file: DriveFile) -> Path:
     return cache_dir(data_dir, user_id) / f"{file.id}__{sanitise(file.modified_time)}.{ext}"
 
 
-def ensure_cached(
-    data_dir: Path, user_id: uuid.UUID, file: DriveFile, client: DriveClient
-) -> tuple[Path, bool]:
-    path = cache_path(data_dir, user_id, file)
-    if path.exists() and path.stat().st_size > 0:
-        return path, False
-    client.download(file.id, path)
-    return path, True
+def is_cached(path: Path) -> bool:
+    """The one cache-hit check: a non-empty file at the cache path (a zero-byte leftover is a miss).
+    Downloads go through `service.download_for_job`, which writes atomically."""
+    return path.exists() and path.stat().st_size > 0

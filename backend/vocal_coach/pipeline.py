@@ -25,6 +25,7 @@ from vocal_coach.analysis.schema import SourceInfo
 from vocal_coach.analysis.serialise import to_canonical_json
 from vocal_coach.analysis.tracks import extract_tracks
 from vocal_coach.config import AppConfig, config_hash
+from vocal_coach.drive import cache as drive_cache
 from vocal_coach.drive import service as drive_service
 from vocal_coach.drive.errors import DriveError, DriveNotConnected, DriveNotFound
 from vocal_coach.llm.base import LLMProvider
@@ -91,11 +92,11 @@ def run_pipeline(
     work.mkdir(parents=True, exist_ok=True)
     try:
         progress("download", STAGE_PROGRESS["download"])  # source is local (upload) already, or fetched below (Drive)
-        if req.drive_file_id and not (req.source_path.exists() and req.source_path.stat().st_size > 0):
+        if req.drive_file_id and not drive_cache.is_cached(req.source_path):
             try:
                 downloader(session, settings, req.user_id, req.drive_file_id, req.drive_modified_time or "", req.source_path)
             except DriveNotConnected as e:
-                raise RuntimeError("Google Drive is no longer connected; reconnect it in Settings and retry") from e
+                raise RuntimeError("Google Drive is no longer connected; reconnect it in Settings and analyse the file again") from e
             except DriveNotFound as e:
                 raise RuntimeError(f"Drive file {req.file_name} was not found") from e
             except DriveError as e:

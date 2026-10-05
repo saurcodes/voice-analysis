@@ -1,7 +1,6 @@
-"""Tests for the per-user Drive download cache: path naming/sanitising, cache hit
-(no HTTP call), cache miss (downloads once), and a zero-byte stale file counting
-as a miss. No network; the one real download in a miss goes through DriveClient,
-mocked via pytest-httpx."""
+"""Tests for the per-user Drive download cache: path naming/sanitising, the cache-hit
+predicate (a zero-byte stale file is a miss), and `download_for_job`, the single place
+that downloads into the cache (with the upload size cap). No network."""
 from __future__ import annotations
 
 import uuid
@@ -9,8 +8,9 @@ import uuid
 import pytest
 
 from vocal_coach.drive import service
-from vocal_coach.drive.cache import cache_path, ensure_cached, sanitise
-from vocal_coach.drive.client import DRIVE_API, DriveClient, DriveFile
+from vocal_coach.drive.cache import cache_path, is_cached, sanitise
+from vocal_coach.drive.client import DriveFile
+from vocal_coach.settings import Settings
 
 USER_ID = uuid.uuid4()
 
@@ -41,47 +41,14 @@ def test_cache_path_uses_bin_when_no_extension(tmp_path):
     assert path.name == "file-1__2026-10-04T10-42-00.000Z.bin"
 
 
-def test_ensure_cached_hit_returns_existing_path_without_request(tmp_path, httpx_mock):
-    file = _file()
-    path = cache_path(tmp_path, USER_ID, file)
-    path.parent.mkdir(parents=True)
-    path.write_bytes(b"already here")
-    client = DriveClient("token")
-
-    result_path, downloaded = ensure_cached(tmp_path, USER_ID, file, client)
-
-    assert result_path == path
-    assert downloaded is False
-    assert path.read_bytes() == b"already here"
-    # httpx_mock's default assert_all_requests_were_expected means any unexpected
-    # request (none registered here) would fail the test, confirming no call was made.
-
-
-def test_ensure_cached_miss_downloads_once(tmp_path, httpx_mock):
-    file = _file()
-    httpx_mock.add_response(url=f"{DRIVE_API}/file-1?alt=media", content=b"downloaded bytes")
-    client = DriveClient("token")
-
-    result_path, downloaded = ensure_cached(tmp_path, USER_ID, file, client)
-
-    assert downloaded is True
-    assert result_path == cache_path(tmp_path, USER_ID, file)
-    assert result_path.read_bytes() == b"downloaded bytes"
-    assert len(httpx_mock.get_requests()) == 1
-
-
-def test_ensure_cached_zero_byte_file_is_a_miss_and_redownloads(tmp_path, httpx_mock):
-    file = _file()
-    path = cache_path(tmp_path, USER_ID, file)
+def test_is_cached_requires_a_non_empty_file(tmp_path):
+    path = cache_path(tmp_path, USER_ID, _file())
+    assert is_cached(path) is False
     path.parent.mkdir(parents=True)
     path.write_bytes(b"")
-    httpx_mock.add_response(url=f"{DRIVE_API}/file-1?alt=media", content=b"fresh bytes")
-    client = DriveClient("token")
-
-    result_path, downloaded = ensure_cached(tmp_path, USER_ID, file, client)
-
-    assert downloaded is True
-    assert result_path.read_bytes() == b"fresh bytes"
+    assert is_cached(path) is False  # a zero-byte leftover is a miss
+    path.write_bytes(b"already here")
+    assert is_cached(path) is True
 
 
 def test_download_for_job_hit_after_first_download_never_calls_the_client_twice(tmp_path, monkeypatch):
@@ -94,20 +61,22 @@ def test_download_for_job_hit_after_first_download_never_calls_the_client_twice(
         def __init__(self, token):
             self.token = token
 
-        def download(self, file_id, dest):
+        def download(self, file_id, dest, *, max_bytes=None):
+            assert max_bytes == settings.max_upload_bytes
             assert not calls  # a second real download would mean the cache check was skipped
             calls.append(file_id)
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(b"downloaded once")
             return dest
 
+    settings = Settings(_env_file=None, max_upload_mb=3)
     monkeypatch.setattr(service, "access_token_for", lambda *a, **k: "tok")
     monkeypatch.setattr(service, "DriveClient", FakeClient)
 
     dest = tmp_path / "cache" / str(USER_ID) / "file-1__mt.m4a"
 
-    first = service.download_for_job(None, None, USER_ID, "file-1", "2026-10-04T10:42:00.000Z", dest)
-    second = service.download_for_job(None, None, USER_ID, "file-1", "2026-10-04T10:42:00.000Z", dest)
+    first = service.download_for_job(None, settings, USER_ID, "file-1", "2026-10-04T10:42:00.000Z", dest)
+    second = service.download_for_job(None, settings, USER_ID, "file-1", "2026-10-04T10:42:00.000Z", dest)
 
     assert first == dest and second == dest
     assert calls == ["file-1"]

@@ -199,7 +199,8 @@ async def _create_drive_analyses(request: Request, user: CurrentUser, session: S
     try:
         body = DriveAnalysisRequest.model_validate(payload)
     except ValidationError as e:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from None
+        detail = "; ".join(err["msg"] for err in e.errors(include_url=False))
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail) from None
 
     settings = request.app.state.settings
     try:
@@ -214,6 +215,11 @@ async def _create_drive_analyses(request: Request, user: CurrentUser, session: S
             files.append(await asyncio.to_thread(client.get_file, file_id))
         except DriveError as e:
             raise drive_http_error(e) from None
+    for file in files:  # every file is checked before any job exists, so a bad one aborts the batch
+        if file.ext not in ALLOWED_EXTENSIONS or file.size is None:
+            raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"unsupported file type: {file.name}")
+        if file.size > settings.max_upload_bytes:
+            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"file too large: {file.name}")
 
     job_ids: list[uuid.UUID] = []
     for file in files:
@@ -224,7 +230,14 @@ async def _create_drive_analyses(request: Request, user: CurrentUser, session: S
                          recorded_at=recorded_at, drive_file_id=file.id, drive_modified_time=file.modified_time,
                          speaker_context=body.speaker_context, llm_enabled=body.llm.enabled,
                          llm_model=body.llm.model, source_sha256=None)
-        submit_or_503(request, session, job.id, req)
+        try:
+            submit_or_503(request, session, job.id, req)
+        except HTTPException:
+            # The runner went away mid-batch: fail the jobs already handed over too, so the
+            # caller's retry of the whole batch does not leave stray queued duplicates behind.
+            for earlier in job_ids:
+                repo.update_job(session, earlier, status="failed", error="job runner unavailable")
+            raise
         job_ids.append(job.id)
     return JobIds(job_ids=job_ids)
 

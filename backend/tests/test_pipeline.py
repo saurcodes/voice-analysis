@@ -306,7 +306,8 @@ def test_pipeline_drive_not_connected_gives_reconnect_message(cfg, session, tmp_
     with pytest.raises(RuntimeError) as exc_info:
         run_pipeline(req, cfg, settings, session, lambda s, p: None, whisper_model=_fake(),
                      drive_downloader=failing_downloader)
-    assert "reconnect it in Settings" in str(exc_info.value)
+    assert str(exc_info.value) == (
+        "Google Drive is no longer connected; reconnect it in Settings and analyse the file again")
 
 
 def test_pipeline_drive_not_found_names_the_file(cfg, session, tmp_path: Path):

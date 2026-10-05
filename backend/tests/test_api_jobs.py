@@ -63,3 +63,15 @@ def test_retry_rejects_running_foreign_and_missing_upload(tmp_path):
             f.unlink()
         r = client.post(f"/api/jobs/{running_id}/retry", headers=ctx["auth"]())
         assert r.status_code == 410
+
+
+def test_retry_of_a_drive_sourced_job_is_410_with_drive_message(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            job = repo.create_job(s, user.id, file_name="take.wav", source_sha256=None)
+            repo.update_job(s, job.id, status="failed", error="could not download from Google Drive")
+        r = client.post(f"/api/jobs/{job.id}/retry", headers=ctx["auth"]())
+        assert r.status_code == 410
+        assert r.json()["detail"] == "Drive-sourced jobs cannot be retried yet; analyse the file again from the Drive tab"

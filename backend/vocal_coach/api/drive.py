@@ -8,6 +8,7 @@ is single-use."""
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -23,6 +24,7 @@ from vocal_coach.drive.errors import (
 )
 from vocal_coach.drive.state import INVALID_STATE_MESSAGE, STATE_MAX_AGE_S
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/drive", tags=["drive"])
 
 NOT_CONNECTED = "drive_not_connected"
@@ -86,6 +88,12 @@ def _clear_cookie(response: Response, settings) -> Response:
     return response
 
 
+def _settings_redirect(settings, outcome: str) -> RedirectResponse:
+    """`outcome` is one of connected, cancelled, error (the frontend's `?drive=` contract)."""
+    return _clear_cookie(RedirectResponse(f"{settings.frontend_origin}/settings?drive={outcome}",
+                                          status_code=status.HTTP_303_SEE_OTHER), settings)
+
+
 def _invalid_state(settings) -> JSONResponse:
     return _clear_cookie(JSONResponse({"detail": INVALID_STATE_MESSAGE}, status_code=status.HTTP_400_BAD_REQUEST),
                          settings)
@@ -94,9 +102,8 @@ def _invalid_state(settings) -> JSONResponse:
 @router.get(
     "/callback",
     responses={
-        status.HTTP_303_SEE_OTHER: {"description": "redirect to the frontend settings page"},
+        status.HTTP_303_SEE_OTHER: {"description": "redirect to /settings?drive=connected, cancelled or error"},
         status.HTTP_400_BAD_REQUEST: {"description": "invalid or expired OAuth state"},
-        status.HTTP_502_BAD_GATEWAY: {"description": "Google returned an error"},
     },
 )
 async def callback(
@@ -104,8 +111,9 @@ async def callback(
 ) -> Response:
     settings = request.app.state.settings
     if error == "access_denied":
-        return _clear_cookie(RedirectResponse(f"{settings.frontend_origin}/settings?drive=cancelled",
-                                              status_code=status.HTTP_303_SEE_OTHER), settings)
+        return _settings_redirect(settings, "cancelled")
+    if error:
+        return _settings_redirect(settings, "error")
     if not code or not state:
         return _invalid_state(settings)
     try:
@@ -124,11 +132,10 @@ async def callback(
 
     try:
         await asyncio.to_thread(_run)
-    except DriveError as e:
-        http_error = drive_http_error(e)
-        return _clear_cookie(JSONResponse({"detail": http_error.detail}, status_code=http_error.status_code), settings)
-    return _clear_cookie(RedirectResponse(f"{settings.frontend_origin}/settings?drive=connected",
-                                          status_code=status.HTTP_303_SEE_OTHER), settings)
+    except DriveError as e:  # state verified: the browser goes back to Settings, never a JSON page
+        log.info("drive connect failed: %s", e)  # DriveError messages carry no token or body
+        return _settings_redirect(settings, "error")
+    return _settings_redirect(settings, "connected")
 
 
 @router.delete(

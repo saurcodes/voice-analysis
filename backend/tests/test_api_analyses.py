@@ -204,6 +204,94 @@ def test_drive_json_post_creates_one_job_per_file_in_order(tmp_path, httpx_mock)
         assert job1["file_name"] == "one.wav" and job2["file_name"] == "two.m4a"
 
 
+def _jobs_for(ctx, sub="user-1"):
+    with ctx["session_factory"]() as s:
+        return repo.list_jobs(s, repo.upsert_user(s, sub, None, None).id)
+
+
+@pytest.mark.parametrize("name, mime_type, size", [
+    ("notes.pdf", "application/pdf", "10"),
+    ("Meeting notes", "application/vnd.google-apps.document", None),  # Google Doc: no extension, no size
+    ("take.wav", "audio/wav", None),  # media name but Drive reports no size
+])
+def test_drive_json_post_unsupported_file_is_415_with_zero_jobs(tmp_path, httpx_mock, name, mime_type, size):
+    captured = []
+    app, ctx = make_test_app(tmp_path, job_fn=_capturing_job_fn(captured), settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "tok"})
+        _mock_get_file(httpx_mock, "ok1", name="good.wav", modified_time="2026-10-01T00:00:00.000Z")
+        url = httpx.URL(f"{DRIVE_API}/bad1", params={"fields": DRIVE_GET_FIELDS})
+        entry = {"id": "bad1", "name": name, "mimeType": mime_type, "modifiedTime": "2026-10-01T00:00:00.000Z"}
+        if size is not None:
+            entry["size"] = size
+        httpx_mock.add_response(url=url, json=entry)
+
+        r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": ["ok1", "bad1"]})
+
+        assert r.status_code == 415
+        assert r.json()["detail"] == f"unsupported file type: {name}"
+        assert captured == [] and _jobs_for(ctx) == []
+
+
+def test_drive_json_post_oversized_file_is_413_with_zero_jobs(tmp_path, httpx_mock):
+    captured = []
+    app, ctx = make_test_app(tmp_path, job_fn=_capturing_job_fn(captured), max_upload_mb=1,
+                             settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "tok"})
+        _mock_get_file(httpx_mock, "ok1", name="good.wav", modified_time="2026-10-01T00:00:00.000Z",
+                       size=str(1024 * 1024))
+        _mock_get_file(httpx_mock, "big1", name="long take.mov", modified_time="2026-10-01T00:00:00.000Z",
+                       size=str(1024 * 1024 + 1))
+
+        r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": ["ok1", "big1"]})
+
+        assert r.status_code == 413
+        assert r.json()["detail"] == "file too large: long take.mov"
+        assert captured == [] and _jobs_for(ctx) == []
+
+
+def test_drive_json_post_runner_failure_mid_batch_fails_the_whole_batch(tmp_path, httpx_mock):
+    from vocal_coach.jobs.runner import RunnerUnavailable
+
+    class DiesAfterFirst:
+        def __init__(self):
+            self.calls = 0
+
+        def submit(self, req):
+            self.calls += 1
+            if self.calls > 1:
+                raise RunnerUnavailable("job runner unavailable")
+
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn, settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        app.state.runner = DiesAfterFirst()
+        _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "tok"})
+        _mock_get_file(httpx_mock, "f1", name="one.wav", modified_time="2026-10-01T00:00:00.000Z")
+        _mock_get_file(httpx_mock, "f2", name="two.wav", modified_time="2026-10-02T00:00:00.000Z")
+
+        r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": ["f1", "f2"]})
+
+        assert r.status_code == 503
+        jobs = _jobs_for(ctx)
+        assert len(jobs) == 2
+        assert {(j.status, j.error) for j in jobs} == {("failed", "job runner unavailable")}
+
+
+def test_drive_json_post_422_detail_lists_messages_only(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn, settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": []})
+        assert r.status_code == 422
+        detail = r.json()["detail"]
+        assert detail == "List should have at least 1 item after validation, not 0"
+        assert "pydantic" not in detail and "https://" not in detail
+
+
 def test_drive_json_post_404_aborts_with_zero_jobs(tmp_path, httpx_mock):
     captured = []
     app, ctx = make_test_app(tmp_path, job_fn=_capturing_job_fn(captured), settings_overrides=_drive_overrides())

@@ -112,12 +112,12 @@ across threads, and each worker loads the whisper model once. Progress is writte
 `GET /api/jobs/{id}/events`. On restart, unfinished jobs are marked `failed / server restarted`. Run exactly one backend
 process per database (the restart sweep is not multi-process safe).
 
-Endpoints: see `/docs`. Drive (`/api/drive/*`, `source: "drive"`) is a stub until Plan 7. Coaching
+Endpoints: see `/docs`. Drive (`/api/drive/*`, `source: "drive"`) is described under "Google Drive" below. Coaching
 (`/api/analyses/{id}/coach`, `/api/llm/models`, `/api/me`'s `llm_enabled`/`llm_provider`) is wired up; see
 "LLM coaching" below.
 
 Jobs: `GET /api/jobs?status=` lists jobs newest first; `POST /api/jobs/{id}/retry` re-runs a finished job's upload (410
-once the upload has been cleaned up). A worker process that dies (OOM kill, segfault) fails its job with
+once the upload has been cleaned up, and 410 for a Drive-sourced job, which is analysed again from the Drive tab). A worker process that dies (OOM kill, segfault) fails its job with
 `worker crashed: …` and the pool is rebuilt; if that fails the upload answers 503. Uploads live in
 `DATA_DIR/uploads/<user>/<source_sha256>.<ext>` and are deleted once no analysis and no unfinished job references them
 (after the last analysis is deleted, or after a pipeline failure).
@@ -283,8 +283,12 @@ Google, stored as its own connection row.
 ### 2. Environment keys
 
 - `SECRET_KEY`: signs and verifies the OAuth `state` parameter. Generate with:
-  `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`.
-- `DRIVE_TOKEN_KEY`: a Fernet key that encrypts stored Drive refresh tokens. Generate with:
+  `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`. Once Drive is configured the
+  backend refuses to start (a `RuntimeError` at startup) if `SECRET_KEY` is empty, is the dev
+  default `dev-secret-change-me`, or is shorter than 32 characters. Compose keeps that dev default
+  so a server without Drive still starts.
+- `DRIVE_TOKEN_KEY`: a Fernet key that encrypts stored Drive refresh tokens; a malformed key is also
+  refused at startup when Drive is configured. Generate with:
   `backend/.venv/bin/python -c "from vocal_coach.drive.crypto import generate_key; print(generate_key())"`.
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`: from the OAuth client created above.
 - `GOOGLE_REDIRECT_URI`: must match the Google Cloud Console entry exactly. Leave it commented out
@@ -302,7 +306,12 @@ Google, stored as its own connection row.
 Linking Drive is independent of the Keycloak session: a user can be signed in without Drive linked,
 or (in principle) have Drive linked and then sign out of Keycloak without affecting the Drive
 connection. The OAuth `state` parameter is signed with `SECRET_KEY` and binds the connection to the
-`user_id` that started the flow, with a 10 minute expiry. Only the refresh token is stored, and only
+`user_id` that started the flow, with a 10 minute expiry. `GET /api/drive/connect` also sets an
+HttpOnly cookie `vc_drive_oauth` (path `/api/drive/callback`, `SameSite=Lax`, `Secure` when
+`FRONTEND_ORIGIN` is https, 10 minutes) holding the state's nonce; the callback requires the cookie
+to match, which ties the flow to the browser that started it, and clears it on every outcome. Each
+state is single-use: a second callback with the same state is a 400. The frontend's connect request
+therefore sends credentials. Only the refresh token is stored, and only
 Fernet-encrypted with `DRIVE_TOKEN_KEY`; an access token is fetched from Google per request and is
 never stored, logged or returned by any endpoint. Disconnecting revokes the token at Google and
 deletes the stored connection row.
@@ -313,8 +322,14 @@ deletes the stored connection row.
   `userinfo.email`). `503 {"detail": "drive is not configured on this server"}` when
   `drive_configured` is false.
 - `GET /api/drive/callback` exchanges the authorization code, stores the encrypted refresh token and
-  `google_email`, and redirects back to the frontend. A tampered or expired `state` is
-  `400 {"detail": "invalid or expired state"}`.
+  `google_email` (revoking any previous connection's token first), and redirects 303 to
+  `/settings?drive=connected`. A missing, tampered, expired or replayed `state`, or a missing or
+  mismatched `vc_drive_oauth` cookie, is `400 {"detail": "invalid or expired state"}`. Google's
+  `error=access_denied` redirects to `/settings?drive=cancelled`; any other Google `error`, and any
+  failure after the state verified (code exchange rejected, Drive scope not granted, Google
+  unreachable), redirects to `/settings?drive=error`. Access logs (uvicorn, nginx) may record the
+  callback query string, which includes the one-time authorization `code`; it is useless without
+  the client secret and is single-use, but treat those logs accordingly.
 - `DELETE /api/drive/connect` revokes the token at Google and removes the connection row.
 - `GET /api/drive/files?folder_id=` lists audio/video files in a Drive folder. `409
   {"detail": "drive_not_connected"}` when the user has not linked Drive, including after Google
@@ -322,6 +337,16 @@ deletes the stored connection row.
   A Google error otherwise is `502 {"detail": "google drive error <status>"}`.
 - `GET /api/me` adds `drive_configured` (server has credentials), `drive_connected` (this user has a
   stored connection) and `google_email` (the linked account, or `null`).
+- `POST /api/analyses` with `Content-Type: application/json` and body
+  `{"source": "drive", "file_ids": [...], "speaker_context": str | null, "llm": {"enabled": bool, "model": str | null}}`
+  creates one job per file, returning `{"job_ids": [...]}` in the same order. `file_ids` holds 1 to
+  20 Drive ids, each matching `^[A-Za-z0-9_-]{1,200}$` (else 422). Every file's metadata is fetched
+  before any job is created, so the whole request aborts with zero jobs when one id is unreadable
+  (`404 {"detail": "drive file <id> not found"}`), is not an allowed audio/video type or has no
+  size (`415 {"detail": "unsupported file type: <name>"}`), or exceeds `MAX_UPLOAD_MB`
+  (`413 {"detail": "file too large: <name>"}`). Drive not linked is `409 drive_not_connected`. If
+  the job runner fails partway through submitting the batch, the jobs already created are marked
+  failed and the response is 503. The worker's download is also capped at `MAX_UPLOAD_MB`.
 
 ### 5. Cache
 

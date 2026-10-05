@@ -21,6 +21,7 @@ router = APIRouter(tags=["jobs"])
 JobStatusName = Literal["queued", "running", "done", "failed"]
 JobStage = Literal["download", "extract", "analyse", "transcribe", "coach", "done"]
 JOBS_LIMIT_MIN, JOBS_LIMIT_MAX = 1, 200  # bounds for GET /jobs?limit=
+DRIVE_RETRY_GONE = "Drive-sourced jobs cannot be retried yet; analyse the file again from the Drive tab"
 
 
 class JobStatus(BaseModel):
@@ -73,7 +74,7 @@ def get_job(job_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), se
 @router.post("/jobs/{job_id}/retry", status_code=status.HTTP_202_ACCEPTED, response_model=JobId,
              responses={status.HTTP_404_NOT_FOUND: {"description": "job not found"},
                         status.HTTP_409_CONFLICT: {"description": "job is not finished"},
-                        status.HTTP_410_GONE: {"description": "the uploaded file is no longer stored"},
+                        status.HTTP_410_GONE: {"description": "the uploaded file is no longer stored, or the job is Drive-sourced"},
                         status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "job runner unavailable"}})
 def retry_job(job_id: uuid.UUID, request: Request, user: CurrentUser = Depends(get_current_user),
               session: Session = Depends(get_session)):
@@ -82,7 +83,9 @@ def retry_job(job_id: uuid.UUID, request: Request, user: CurrentUser = Depends(g
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
     if job.status not in repo.TERMINAL_STATUSES:
         raise HTTPException(status.HTTP_409_CONFLICT, "job is not finished")
-    found = paths.find_upload(request.app.state.settings.data_dir, user.id, job.source_sha256) if job.source_sha256 else None
+    if job.source_sha256 is None:  # Drive-sourced (or legacy) job: proper Drive retry is Plan 8
+        raise HTTPException(status.HTTP_410_GONE, DRIVE_RETRY_GONE)
+    found = paths.find_upload(request.app.state.settings.data_dir, user.id, job.source_sha256)
     if found is None:
         raise HTTPException(status.HTTP_410_GONE, "the uploaded file is no longer stored; upload it again")
     new = repo.create_job(session, user.id, file_name=job.file_name, source_sha256=job.source_sha256,
