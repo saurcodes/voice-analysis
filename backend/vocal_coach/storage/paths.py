@@ -8,10 +8,16 @@ import uuid
 from pathlib import Path
 
 UPLOADS_SUBDIR = "uploads"
+CACHE_SUBDIR = "cache"
 
 
 def uploads_dir(data_dir: Path, user_id: uuid.UUID) -> Path:
     return Path(data_dir) / UPLOADS_SUBDIR / str(user_id)
+
+
+def cache_dir(data_dir: Path, user_id: uuid.UUID) -> Path:
+    """Per-user directory for cached Google Drive downloads (see `vocal_coach.drive.cache`)."""
+    return Path(data_dir) / CACHE_SUBDIR / str(user_id)
 
 
 def upload_path(data_dir: Path, user_id: uuid.UUID, source_sha256: str, ext: str) -> Path:

@@ -24,6 +24,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from vocal_coach.analysis.schema import MetricsReport
 from vocal_coach.auth.deps import CurrentUser, get_current_user, get_session
 from vocal_coach.api.jobs import submit_or_503
+from vocal_coach.drive.client import MEDIA_EXTENSIONS as ALLOWED_EXTENSIONS
 from vocal_coach.pipeline import JobRequest
 from vocal_coach.storage import paths, repo
 from vocal_coach.storage.repo import AnalysisSummary
@@ -31,7 +32,6 @@ from vocal_coach.transcription.schema import Transcript
 
 router = APIRouter(tags=["analyses"])
 
-ALLOWED_EXTENSIONS = frozenset({"m4a", "mp3", "wav", "mov", "mp4"})  # spec §5
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 RAW_KINDS = ("metrics", "transcript", "coaching")
 LIST_LIMIT_MIN, LIST_LIMIT_MAX, LIST_LIMIT_DEFAULT = 1, 200, repo.SUMMARY_PAGE_SIZE
