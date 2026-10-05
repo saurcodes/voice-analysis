@@ -417,6 +417,50 @@ def test_chunked_upload_with_no_content_length_over_cap_is_413_with_no_partial_f
         assert not list((tmp_path / "data" / "uploads").rglob("*"))
 
 
+def test_chunked_upload_over_cap_stops_reading_the_body_before_parsing_finishes(tmp_path):
+    """The body limit cuts a chunked upload off while `request.form()` is still spooling it: the
+    route reads no more than about cap + 1 MiB (multipart slack) of an 8 MiB body before the 413.
+    Driven through raw ASGI because TestClient reads a request body generator to the end up front."""
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn, max_upload_mb=1)
+    boundary = "testboundary123"
+    step = 64 * 1024
+    head = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="big.wav"\r\n'
+            f"Content-Type: audio/wav\r\n\r\n").encode()
+    total_chunks = 8 * 1024 * 1024 // step
+    sent = {"chunks": 0, "bytes": 0}
+    responses: list[dict] = []
+
+    async def receive():
+        index = sent["chunks"]
+        if index > total_chunks:
+            return {"type": "http.disconnect"}
+        body = head if index == 0 else b"\0" * step
+        sent["chunks"] += 1
+        sent["bytes"] += len(body)
+        return {"type": "http.request", "body": body, "more_body": index < total_chunks}
+
+    async def send(message):
+        responses.append(message)
+
+    with TestClient(app) as client:
+        headers = [(k.lower().encode(), v.encode()) for k, v in {
+            **ctx["auth"](), "content-type": f"multipart/form-data; boundary={boundary}"}.items()]
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/api/analyses", "raw_path": b"/api/analyses", "root_path": "",
+                 "query_string": b"", "headers": headers, "client": ("testclient", 50000),
+                 "server": ("testserver", 80)}
+        client.portal.call(app, scope, receive, send)
+
+    start = next(m for m in responses if m["type"] == "http.response.start")
+    assert start["status"] == 413
+    body = b"".join(m.get("body", b"") for m in responses if m["type"] == "http.response.body")
+    assert json.loads(body)["detail"] == "file too large (max 1 MB)"
+    cap = ctx["settings"].max_upload_bytes
+    assert sent["bytes"] <= cap + 1024 * 1024 + step  # stopped near the limit, not at the 8 MiB end
+    assert sent["chunks"] < total_chunks
+    assert not list((tmp_path / "data" / "uploads").rglob("*"))
+
+
 def test_upload_returns_503_before_storing_when_runner_unavailable(tmp_path):
     class UnavailableRunner:
         def available(self):
@@ -531,6 +575,30 @@ def test_delete_removes_cache_files_once_the_last_drive_analysis_referencing_the
 
         assert client.delete(f"/api/analyses/{second.id}", headers=ctx["auth"]()).status_code == 204
         assert not cached.exists()
+
+
+def test_delete_keeps_cache_files_while_an_unfinished_drive_job_still_needs_them(tmp_path, httpx_mock):
+    """Deleting the last Drive analysis of f1 must not remove its cached download while a queued job
+    for f1 is still waiting to read it."""
+    app, ctx = make_test_app(tmp_path, job_fn=fake_drive_job_fn, settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "tok"})
+        _mock_get_file(httpx_mock, "f1", name="one.wav", modified_time="2026-10-01T00:00:00.000Z")
+
+        job_id = client.post("/api/analyses", headers=ctx["auth"](),
+                             json={"source": "drive", "file_ids": ["f1"]}).json()["job_ids"][0]
+        analysis_id = client.get(f"/api/jobs/{job_id}", headers=ctx["auth"]()).json()["analysis_id"]
+
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            cache_files = list((tmp_path / "data" / "cache" / str(user.id)).glob("f1__*"))
+            repo.create_job(s, user.id, file_name="one.wav", drive_file_id="f1",
+                            drive_modified_time="2026-10-01T00:00:00.000Z")  # queued, never run
+        assert len(cache_files) == 1
+
+        assert client.delete(f"/api/analyses/{analysis_id}", headers=ctx["auth"]()).status_code == 204
+        assert cache_files[0].exists()
 
 
 @requires_ffmpeg

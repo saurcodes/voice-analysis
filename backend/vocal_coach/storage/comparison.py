@@ -18,18 +18,22 @@ MIN_POINTS = 2  # a change needs a start value and an end value; a mismatch need
 # Decimal places a metric is actually displayed at. A delta that rounds to 0.0 at this precision is
 # "unchanged" regardless of `min_meaningful_change_pct` (a tiny but percentage-significant wobble on
 # a near-zero metric should not read as improved/worsened). Count-like metrics (whole numbers) round
-# to 0 decimals; `modulation_depth` is shown to 2 decimals; everything else defaults to 1.
+# to 0 decimals; `modulation_depth` is shown to 2 decimals; a `*_fraction` metric is displayed as a
+# percent to 1 decimal, so its raw fraction is compared at 3 decimals; everything else defaults to 1.
 DISPLAY_PRECISION: dict[str, int] = {
     "articulation.modulation_depth": 2,
     "phrasing.long_pause_count_ge_1s": 0,
     "energy.trailing_off_count": 0,
 }
 DEFAULT_DISPLAY_PRECISION = 1
+FRACTION_DISPLAY_PRECISION = 3  # 1 decimal of the displayed percent
 
 
 def _display_precision(path: str) -> int:
     if path in DISPLAY_PRECISION:
         return DISPLAY_PRECISION[path]
+    if path.endswith("_fraction"):
+        return FRACTION_DISPLAY_PRECISION
     if path.endswith("_count"):
         return 0
     return DEFAULT_DISPLAY_PRECISION

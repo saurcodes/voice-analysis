@@ -4,7 +4,7 @@ kept here; the pipeline derives it per job in its own temp work dir.
 
 The cache is capped in total size across all users (`CACHE_MAX_MB`/`settings.cache_max_bytes`),
 evicted least-recently-used before each download (`prune_lru`); and a file's cached copies are
-removed once no analysis references it any more (`remove_for_file`, called on delete)."""
+removed once no analysis or unfinished job references it any more (`remove_for_file`, called on delete)."""
 from __future__ import annotations
 
 import re
@@ -75,10 +75,13 @@ def prune_lru(data_dir: Path, *, max_bytes: int, protect: frozenset[Path] = froz
 
 def remove_for_file(data_dir: Path, user_id: uuid.UUID, file_id: str) -> list[Path]:
     """Deletes every cached copy of this Drive file for this user (one per `modifiedTime` it was
-    ever cached under). Called once the last analysis referencing the file is deleted. Never raises
-    on a file that is already gone."""
+    ever cached under). Called once nothing (no analysis, no unfinished job) references the file.
+    A `.part` file (a download in progress) is left alone. Never raises on a file that is already
+    gone."""
     removed: list[Path] = []
     for path in cache_dir(data_dir, user_id).glob(f"{file_id}__*"):
+        if path.name.endswith(_PART_SUFFIX):
+            continue
         try:
             path.unlink()
         except OSError:

@@ -125,7 +125,9 @@ def download_for_job(
 
     Before downloading, evicts least-recently-used cache files (across all users) down to
     `CACHE_MAX_MB`, protecting `dest` so a cap already at or over the limit never blocks this job's
-    own download."""
+    own download. Only this download's destination is protected: with `JOB_WORKERS>1` a concurrent
+    job's cached source (one it has not finished reading) may be evicted. The prune runs before the
+    download, so the cache can end up over the cap by up to the size of this one download."""
     if cache.is_cached(dest):
         return dest
     cache.prune_lru(settings.data_dir, max_bytes=settings.cache_max_bytes, protect=frozenset({dest}))

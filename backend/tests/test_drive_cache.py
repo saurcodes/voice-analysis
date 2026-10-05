@@ -112,13 +112,16 @@ def test_download_for_job_uses_drive_max_bytes_override(tmp_path, monkeypatch):
 
 
 def test_download_for_job_prunes_the_cache_before_downloading_protecting_the_destination(tmp_path, monkeypatch):
-    """Review Focus 4: the cache is already over the (tiny) cap from another user's old file; the
-    current job's destination is protected throughout, and the old file is evicted to make room."""
+    """Review Focus 4: the cache is already over a 1 MB cap from another user's old files; the
+    current job's destination is protected throughout, the oldest file is evicted to make room, and
+    afterwards the cache is over the cap by at most the one new download."""
     other_user = uuid.uuid4()
     stale_dir = tmp_path / "cache" / str(other_user)
-    stale_dir.mkdir(parents=True)
-    stale_file = stale_dir / "old__mt.wav"
-    stale_file.write_bytes(b"0" * 20)
+    oldest = stale_dir / "old__mt.wav"
+    newer = stale_dir / "newer__mt.wav"
+    _touch(oldest, size=600 * 1024, mtime=1_000)
+    _touch(newer, size=600 * 1024, mtime=2_000)
+    downloaded = b"1" * 5
 
     class FakeClient:
         def __init__(self, token):
@@ -126,10 +129,10 @@ def test_download_for_job_prunes_the_cache_before_downloading_protecting_the_des
 
         def download(self, file_id, dest, *, max_bytes=None):
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(b"1" * 5)
+            dest.write_bytes(downloaded)
             return dest
 
-    settings = Settings(_env_file=None, cache_max_mb=0, data_dir=tmp_path)  # cap of 0: anything unprotected goes
+    settings = Settings(_env_file=None, cache_max_mb=1, data_dir=tmp_path)
     monkeypatch.setattr(service, "access_token_for", lambda *a, **k: "tok")
     monkeypatch.setattr(service, "DriveClient", FakeClient)
 
@@ -137,8 +140,11 @@ def test_download_for_job_prunes_the_cache_before_downloading_protecting_the_des
     result = service.download_for_job(None, settings, USER_ID, "new", "2026-10-04T10:42:00.000Z", dest)
 
     assert result == dest
-    assert dest.read_bytes() == b"1" * 5
-    assert not stale_file.exists()  # evicted to make room
+    assert dest.read_bytes() == downloaded
+    assert not oldest.exists()  # evicted to make room
+    assert newer.exists()  # one eviction already got under the cap
+    total = sum(p.stat().st_size for p in (tmp_path / "cache").rglob("*") if p.is_file())
+    assert total <= settings.cache_max_bytes + len(downloaded)
 
 
 def _touch(path: Path, *, size: int, mtime: float) -> None:
@@ -238,6 +244,19 @@ def test_remove_for_file_removes_every_cached_copy_for_that_user_only(tmp_path):
     assert set(removed) == {target1, target2}
     assert not target1.exists() and not target2.exists()
     assert other_file.exists() and other_user.exists()
+
+
+def test_remove_for_file_leaves_an_in_flight_part_file_alone(tmp_path):
+    cached = cache_path(tmp_path, USER_ID, _file(id_="f1", modified_time="2026-10-01T00:00:00.000Z"))
+    part = cached.with_name(cached.name + ".part")
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(b"x")
+    part.write_bytes(b"y")
+
+    removed = remove_for_file(tmp_path, USER_ID, "f1")
+
+    assert removed == [cached]
+    assert part.exists()
 
 
 def test_remove_for_file_on_nothing_cached_returns_empty_list(tmp_path):

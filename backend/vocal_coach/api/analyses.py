@@ -1,10 +1,10 @@
 """Upload, list, detail, raw download and delete for a user's analyses.
 
-NOTE: `Content-Length` is checked before `request.form()` so a declared-oversized upload is
-rejected without reading the body, and the post-parse byte count in `_store_upload` remains the
-backstop for chunked requests with no `Content-Length`. Starlette's `request.form()` still
-buffers the whole multipart body to a spooled temp file before we ever see it, so this is not
-true incremental/streaming multipart parsing — that's follow-up hardening (ledgered for Plan 8).
+Upload size is enforced in three places: a declared `Content-Length` over the cap is rejected
+before the body is read; the request's ASGI receive is wrapped so a body (chunked, with no
+`Content-Length`) that grows past the cap plus some multipart slack is cut off with a 413 while
+Starlette's `request.form()` is still spooling it; and `_store_upload` counts the file part's
+exact bytes as the final check.
 """
 from __future__ import annotations
 
@@ -104,6 +104,31 @@ def _reject_if_declared_too_large(request: Request, max_bytes: int) -> None:
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"declared size exceeds {max_bytes} bytes")
 
 
+def _file_too_large(max_bytes: int) -> HTTPException:
+    return HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"file too large (max {max_bytes // BYTES_PER_MB} MB)")
+
+
+def _limit_request_body(request: Request, max_bytes: int) -> None:
+    """Makes the request body raise 413 once more than `max_bytes + UPLOAD_CHUNK_BYTES` bytes have
+    arrived (the slack covers multipart framing and the other form fields), so `request.form()`
+    cannot spool an unbounded chunked upload to disk before `_store_upload` gets to count it."""
+    limit = max_bytes + UPLOAD_CHUNK_BYTES
+    receive = request.receive
+    received = 0
+
+    async def limited_receive():
+        nonlocal received
+        message = await receive()
+        if message["type"] == "http.request":
+            received += len(message.get("body", b""))
+            if received > limit:
+                raise _file_too_large(max_bytes)
+        return message
+
+    # Starlette has no public hook for wrapping the body stream; this only affects this route's request.
+    request._receive = limited_receive
+
+
 def to_detail(row) -> AnalysisDetail:
     return AnalysisDetail(id=row.id, file_name=row.file_name, drive_file_id=row.drive_file_id,
                           recorded_at=row.recorded_at, analysed_at=row.analysed_at, analyser_version=row.analyser_version,
@@ -140,8 +165,7 @@ async def _store_upload(file: UploadFile, data_dir: Path, user_id: uuid.UUID, ma
             while chunk := await file.read(UPLOAD_CHUNK_BYTES):
                 size += len(chunk)
                 if size > max_bytes:
-                    max_mb = max_bytes // BYTES_PER_MB
-                    raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"file too large (max {max_mb} MB)")
+                    raise _file_too_large(max_bytes)
                 digest.update(chunk)
                 out.write(chunk)
     except BaseException:
@@ -275,6 +299,7 @@ async def create_analysis(
     if content_type.startswith("application/json"):
         return await _create_drive_analyses(request, user, session)
     _reject_if_declared_too_large(request, request.app.state.settings.max_upload_bytes)
+    _limit_request_body(request, request.app.state.settings.max_upload_bytes)
     async with request.form() as form:  # closes the UploadFile's spooled temp file on exit, even on error
         file = form.get("file")
         if not isinstance(file, StarletteUploadFile):

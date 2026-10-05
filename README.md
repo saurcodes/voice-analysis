@@ -196,7 +196,7 @@ All keys are read from `.env` by `docker compose` (variable substitution) and, f
 | `DATA_DIR` | compose: `/data` (volume `appdata`); bare: `data` | backend | Uploads and the Drive cache. Fixed to `/data` in compose. |
 | `JOB_WORKERS` | `1` | backend | Job worker processes; each loads its own whisper model. |
 | `MAX_UPLOAD_MB` | `500` | backend | Upload cap; larger uploads get 413. nginx allows bodies up to 600 MB. |
-| `CACHE_MAX_MB` | `2048` | backend | Total Drive cache cap; files with the oldest modification time are evicted first, before each download. |
+| `CACHE_MAX_MB` | `2048` | backend | Total Drive cache cap; files with the oldest modification time are evicted first, before each download. Only the current download is protected, so with `JOB_WORKERS` above 1 a concurrent job's source can be evicted, and the cache can exceed the cap by one download. |
 | `DRIVE_MAX_MB` | value of `MAX_UPLOAD_MB` | backend | Drive download cap. Compose passes `MAX_UPLOAD_MB`'s value when unset (an empty value is invalid). |
 | `REQUIRE_FFMPEG` | `true` | backend | Startup fails if ffmpeg is missing. Set `false` only for API work on a host without ffmpeg; the backend image has it. |
 | `OPENAI_COMPAT_API_KEY` | empty | backend | Optional bearer token for the `openai_compatible` provider. |

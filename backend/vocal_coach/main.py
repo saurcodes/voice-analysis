@@ -17,6 +17,7 @@ from vocal_coach.config import AppConfig, load_config
 from vocal_coach.drive import service as drive_service
 from vocal_coach.drive.state import ConsumedNonces
 from vocal_coach.jobs.runner import JobRunner
+from vocal_coach.logging_filters import install_access_log_filter
 from vocal_coach.settings import Settings, get_settings
 from vocal_coach.storage import repo
 from vocal_coach.storage.db import make_engine, make_session_factory
@@ -33,6 +34,7 @@ def create_app(
 ) -> FastAPI:
     settings = settings or get_settings()
     cfg = cfg or load_config()
+    install_access_log_filter()  # keep the OAuth callback's code/state out of the uvicorn access log
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

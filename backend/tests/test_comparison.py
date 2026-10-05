@@ -213,3 +213,21 @@ def test_count_metric_zero_delta_is_unchanged():
     )
     row = next(x for x in r.rows if x.path == "energy.trailing_off_count")
     assert row.delta == 0.0 and row.verdict == "unchanged" and row.arrow == "→"
+
+
+def test_fraction_metric_compares_at_percent_display_precision():
+    path = "transcript.derived.clarity.low_conf_word_fraction"
+    cfg = ComparisonConfig(min_meaningful_change_pct=5, directions={path: "down_good"})
+
+    def _frac(a, b):
+        result = compare(
+            [_a(1, _m(), transcript={"derived": {"clarity": {"low_conf_word_fraction": a}}}),
+             _a(2, _m(), transcript={"derived": {"clarity": {"low_conf_word_fraction": b}}}, day=1)],
+            cfg,
+        )
+        return next(x for x in result.rows if x.path == path)
+
+    worsened = _frac(0.10, 0.14)  # 10.0% -> 14.0%, down_good: a rise is worse
+    assert worsened.verdict == "worsened" and worsened.delta == pytest.approx(0.04)
+    unchanged = _frac(0.1000, 0.1004)  # 10.00% -> 10.04%: 0.0 at 1 decimal of the percent
+    assert unchanged.verdict == "unchanged"

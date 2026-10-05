@@ -208,10 +208,14 @@ def count_source_refs(session: Session, user_id: uuid.UUID, source_sha256: str) 
 
 
 def count_drive_refs(session: Session, user_id: uuid.UUID, drive_file_id: str) -> int:
-    """How many of the user's analyses still reference this Drive file. Zero means its cached
+    """How many things still need this Drive file's cached download: the user's analyses that
+    reference it plus their unfinished (queued or running) jobs for it. Zero means its cached
     download(s) can be removed (`vocal_coach.drive.cache.remove_for_file`)."""
-    return int(session.scalar(select(func.count()).select_from(Analysis).where(
-        Analysis.user_id == user_id, Analysis.drive_file_id == drive_file_id)))
+    analyses = session.scalar(select(func.count()).select_from(Analysis).where(
+        Analysis.user_id == user_id, Analysis.drive_file_id == drive_file_id))
+    jobs = session.scalar(select(func.count()).select_from(Job).where(
+        Job.user_id == user_id, Job.drive_file_id == drive_file_id, Job.status.not_in(TERMINAL_STATUSES)))
+    return int(analyses) + int(jobs)  # COUNT(*) is never NULL
 
 
 def _locking_enabled(session: Session) -> bool:
