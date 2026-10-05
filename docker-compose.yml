@@ -52,6 +52,12 @@ services:
       DATA_DIR: /data
       JOB_WORKERS: ${JOB_WORKERS:-1}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-500}
+      CACHE_MAX_MB: ${CACHE_MAX_MB:-2048}
+      # An empty value would fail settings validation (int), so the default is MAX_UPLOAD_MB's value,
+      # which is also what the backend uses when DRIVE_MAX_MB is unset.
+      DRIVE_MAX_MB: ${DRIVE_MAX_MB:-${MAX_UPLOAD_MB:-500}}
+      # The image installs ffmpeg; leave this true.
+      REQUIRE_FFMPEG: ${REQUIRE_FFMPEG:-true}
       OPENAI_COMPAT_API_KEY: ${OPENAI_COMPAT_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # The default is only acceptable while Drive is unconfigured: with Google credentials and

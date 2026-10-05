@@ -196,9 +196,9 @@ All keys are read from `.env` by `docker compose` (variable substitution) and, f
 | `DATA_DIR` | compose: `/data` (volume `appdata`); bare: `data` | backend | Uploads and the Drive cache. Fixed to `/data` in compose. |
 | `JOB_WORKERS` | `1` | backend | Job worker processes; each loads its own whisper model. |
 | `MAX_UPLOAD_MB` | `500` | backend | Upload cap; larger uploads get 413. nginx allows bodies up to 600 MB. |
-| `CACHE_MAX_MB` | `2048` | backend | Total Drive cache cap; least recently used files are evicted first. Not forwarded by `docker-compose.yml`. |
-| `DRIVE_MAX_MB` | value of `MAX_UPLOAD_MB` | backend | Drive download cap. Not forwarded by `docker-compose.yml`. |
-| `REQUIRE_FFMPEG` | `true` | backend | Startup fails if ffmpeg is missing. Set `false` only for API work on a host without ffmpeg. Not forwarded by `docker-compose.yml`. |
+| `CACHE_MAX_MB` | `2048` | backend | Total Drive cache cap; files with the oldest modification time are evicted first, before each download. |
+| `DRIVE_MAX_MB` | value of `MAX_UPLOAD_MB` | backend | Drive download cap. Compose passes `MAX_UPLOAD_MB`'s value when unset (an empty value is invalid). |
+| `REQUIRE_FFMPEG` | `true` | backend | Startup fails if ffmpeg is missing. Set `false` only for API work on a host without ffmpeg; the backend image has it. |
 | `OPENAI_COMPAT_API_KEY` | empty | backend | Optional bearer token for the `openai_compatible` provider. |
 | `ANTHROPIC_API_KEY` | empty | backend | Required when `llm.provider` is `anthropic`. |
 | `LLM_BASE_URL_OVERRIDE` | compose: `http://host.docker.internal:11434/v1`; bare: unset | backend | Replaces `llm.base_url`. Present but empty disables the compose default. |
@@ -210,8 +210,6 @@ All keys are read from `.env` by `docker compose` (variable substitution) and, f
 | `KEYCLOAK_URL` | `http://localhost:8080` | frontend container | Written into the runtime `/config.json` and the CSP at container start. |
 | `KEYCLOAK_REALM` | `vocal-coach` | frontend container | Same. |
 | `KEYCLOAK_CLIENT_ID` | `vocal-coach-web` | frontend container | Same. |
-
-Keys marked "not forwarded by `docker-compose.yml`" take effect for a backend run on the host; to use them under compose, add them to the `backend` service's `environment` block.
 
 Test and script variables (not in `.env`): `TESTCONTAINERS_RYUK_DISABLED` and `VOCAL_COACH_REAL_WHISPER` (backend tests), `E2E_BASE_URL`, `E2E_USER`, `E2E_PASSWORD`, `E2E_USER_EMAIL` (Playwright), `SMOKE_NO_UP`, `SMOKE_TIMEOUT_S`, `API_URL`, `KEYCLOAK_URL`, `SMOKE_USER`, `SMOKE_PASSWORD` (`scripts/smoke.sh`).
 

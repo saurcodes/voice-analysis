@@ -1,4 +1,4 @@
-# Vocal Coach — backend
+# Vocal Coach backend
 
 Setup, configuration, running the stack and the test commands live in the root [README](../README.md). This file is the backend module reference: what each package does, its rules and its endpoints, in the order the plans built them.
 
@@ -43,7 +43,7 @@ Tests use synthetic audio only. ffmpeg-dependent tests are skipped if ffmpeg is 
 
 ### Pinned dependencies
 
-`requirements.lock` is the exact environment the determinism guarantee was verified in. Not every change to it requires a version bump — see "Pinned dependencies — what bumps `ANALYSER_VERSION`" under Transcription (Plan 2) below for the narrower rule.
+`requirements.lock` is the exact environment the determinism guarantee was verified in. Not every change to it requires a version bump; see "Pinned dependencies: what bumps `ANALYSER_VERSION`" under Transcription (Plan 2) below for the narrower rule.
 
 ## Transcription (Plan 2)
 
@@ -57,7 +57,7 @@ python -m vocal_coach.transcription.run data/work/recording.wav --out data/trans
 
 The first run downloads the model (~460 MB for `small`) into the Hugging Face cache. Tests use a fake model; run the real one with `VOCAL_COACH_REAL_WHISPER=1 pytest tests/test_transcription_run.py`.
 
-### Pinned dependencies — what bumps `ANALYSER_VERSION`
+### Pinned dependencies: what bumps `ANALYSER_VERSION`
 
 Only changes to packages that affect `metrics.json` numbers (praat-parselmouth, numpy, scipy, and the ffmpeg binary) require an `ANALYSER_VERSION` bump. Transcription packages (faster-whisper, ctranslate2, tokenizers) do not touch `metrics.json`; `transcript.json → model` records the model size only; package versions live in `requirements.lock`.
 
@@ -93,13 +93,13 @@ silicon) the builder stage compiles it. A cold build takes about 2.5 minutes; la
 The first job downloads the whisper model (~460 MB) into the `models` volume.
 
 **Realm files.** `keycloak/realm-export.dev.json` (default; `KEYCLOAK_REALM_FILE` in `.env`) has the `demo`/`demo` user,
-the password grant and self-registration — `scripts/smoke.sh` needs it. `keycloak/realm-export.json` is
+the password grant and self-registration; `scripts/smoke.sh` needs it. `keycloak/realm-export.json` is
 production-shaped: no users, no password grant, no self-registration; same client, PKCE, audience mapper and `user`
 role. Keycloak imports the realm only when it does not exist yet, so switching files needs a fresh Keycloak database.
 
 Dev loop: `docker compose up -d postgres keycloak`, then from `backend/`:
 `DATABASE_URL=postgresql+psycopg://vocal:vocal@localhost:5432/vocal_coach uvicorn "vocal_coach.main:create_app" --factory --reload`.
-Migrations run once in the container entrypoint; with `--reload` locally run `alembic upgrade head` yourself.
+Migrations run at startup: the container entrypoint applies them before uvicorn starts, and `create_app` applies them in its lifespan, so a local `--reload` run migrates too. `alembic upgrade head` is only for manual use.
 
 Auth: Bearer tokens from Keycloak realm `vocal-coach`, client `vocal-coach-web` (public, PKCE). The realm export adds an
 audience mapper so access tokens carry `aud: vocal-coach-web`; without it Keycloak only emits `aud: account` and the API
@@ -118,8 +118,10 @@ Endpoints: see `/docs`. Drive (`/api/drive/*`, `source: "drive"`) is described u
 (`/api/analyses/{id}/coach`, `/api/llm/models`, `/api/me`'s `llm_enabled`/`llm_provider`) is wired up; see
 "LLM coaching" below.
 
-Jobs: `GET /api/jobs?status=` lists jobs newest first; `POST /api/jobs/{id}/retry` re-runs a finished job's upload (410
-once the upload has been cleaned up, and 410 for a Drive-sourced job, which is analysed again from the Drive tab). A worker process that dies (OOM kill, segfault) fails its job with
+Jobs: `GET /api/jobs?status=` lists jobs newest first; `POST /api/jobs/{id}/retry` re-runs a finished job (410
+once the upload has been cleaned up). A Drive-sourced job is retried by refetching the file's current metadata, so a
+file changed in Drive downloads again under its new `modifiedTime`; 410 when the Drive file is gone, 409 when Drive is
+not connected. A worker process that dies (OOM kill, segfault) fails its job with
 `worker crashed: <reason>` and the pool is rebuilt; if that fails the upload answers 503. Uploads live in
 `DATA_DIR/uploads/<user>/<source_sha256>.<ext>` and are deleted once no analysis and no unfinished job references them
 (after the last analysis is deleted, or after a pipeline failure).
@@ -137,8 +139,11 @@ once the upload has been cleaned up, and 410 for a Drive-sourced job, which is a
 
 ### Known gaps
 
-- Retry re-uses `file_name`, the upload and `recorded_at`, but not `speaker_context` or the LLM options.
-- Multipart uploads are buffered to a spooled temp file by Starlette before the size backstop runs (Plan 8).
+- Retry re-uses `file_name`, the upload and `recorded_at`, but not `speaker_context` or the LLM options (a Drive retry runs
+  with coaching disabled).
+- A chunked upload with no `Content-Length` is still spooled to a temp file by Starlette's form parser before the
+  `MAX_UPLOAD_MB` check runs; a declared `Content-Length` over the cap is rejected before the body is read. Under compose,
+  nginx's `client_max_body_size 600m` bounds the spool.
 
 ## Frontend (Plan 5)
 
@@ -347,16 +352,20 @@ deletes the stored connection row.
   20 Drive ids, each matching `^[A-Za-z0-9_-]{1,200}$` (else 422). Every file's metadata is fetched
   before any job is created, so the whole request aborts with zero jobs when one id is unreadable
   (`404 {"detail": "drive file <id> not found"}`), is not an allowed audio/video type or has no
-  size (`415 {"detail": "unsupported file type: <name>"}`), or exceeds `MAX_UPLOAD_MB`
+  size (`415 {"detail": "unsupported file type: <name>"}`), or exceeds `DRIVE_MAX_MB`
   (`413 {"detail": "file too large: <name>"}`). Drive not linked is `409 drive_not_connected`. If
   the job runner fails partway through submitting the batch, the jobs already created are marked
-  failed and the response is 503. The worker's download is also capped at `MAX_UPLOAD_MB`.
+  failed and the response is 503. The worker's download is also capped at `DRIVE_MAX_MB`.
 
 ### 5. Cache
 
 A downloaded Drive file is cached at `DATA_DIR/cache/<user_id>/<file_id>__<modifiedTime>.<ext>`, so
 a re-analysis of the same file version is a cache hit and a changed `modifiedTime` downloads again.
-The cache is not pruned yet (Plan 8); cached files accumulate until that lands.
+The total size of the cache tree (all users) is capped by `CACHE_MAX_MB` (default 2048). Before each download the
+worker evicts cached files oldest modification time first (a cache hit does not refresh it) until the cache is under
+the cap; the file about to be downloaded and any `.part` file of a download in progress are never counted or removed.
+When the last analysis referencing a Drive file is deleted, every cached copy of that file for that user is removed.
+Drive downloads are capped by `DRIVE_MAX_MB` (default `MAX_UPLOAD_MB`).
 
 ### 6. Troubleshooting
 
