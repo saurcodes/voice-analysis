@@ -26,12 +26,4 @@ test.describe("Settings", () => {
       await expect(notConfigured).toBeVisible();
     }
   });
-
-  test("Sign out leads to Keycloak or the login page", async ({ page }) => {
-    await page.getByRole("button", { name: "Sign out" }).first().click();
-    await page.waitForLoadState("networkidle");
-
-    const url = page.url();
-    expect(url.includes("/login") || /:8080\//.test(url) || /\/realms\//.test(url)).toBe(true);
-  });
 });

@@ -26,6 +26,14 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      testIgnore: /signout\.spec\.ts/,
+    },
+    {
+      // Sign out ends the shared Keycloak SSO session, so it runs after everything else.
+      name: "signout",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: /signout\.spec\.ts/,
+      dependencies: ["chromium"],
     },
   ],
 });

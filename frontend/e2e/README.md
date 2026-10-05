@@ -40,9 +40,12 @@ not a mocked one.
   rows yet), checks all five tabs are present, switches to Coaching, and then either finds
   the "Re-run coaching" button disabled with its explanatory text, or clicks it and checks the
   "Re-run coaching" dialog opens.
-- `settings.spec.ts`: the Account section shows the demo user's email, the Google Drive
-  section shows either a "Connect Google Drive" button or the "not configured" note, and
-  "Sign out" navigates away to Keycloak or the login page.
+- `settings.spec.ts`: the Account section shows the demo user's email and the Google Drive
+  section shows either a "Connect Google Drive" button or the "not configured" note.
+- `signout.spec.ts`: "Sign out" navigates away to Keycloak or the login page. It runs in its
+  own Playwright project (`signout`) that depends on the main one, so it is always the last
+  test: signing out ends the Keycloak SSO session that every other spec shares through the
+  saved storage state, and running it in parallel sent other tests to the login page.
 
 Every spec waits for `page.waitForLoadState("networkidle")` after navigating, before clicking
 anything. This suite exists in part to catch an intermittent issue where a synthetic click
