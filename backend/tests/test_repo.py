@@ -93,6 +93,31 @@ def test_job_lifecycle_and_scoping(session):
     assert set(JOB_STATUSES) == {"queued", "running", "done", "failed"}
 
 
+def test_create_job_stores_drive_fields(session):
+    u = repo.upsert_user(session, "a", None, None)
+    job = repo.create_job(session, u.id, file_name="f.wav", drive_file_id="file-123",
+                          drive_modified_time="2026-10-01T00:00:00.000Z")
+    assert job.drive_file_id == "file-123"
+    assert job.drive_modified_time == "2026-10-01T00:00:00.000Z"
+    plain = repo.create_job(session, u.id)
+    assert plain.drive_file_id is None and plain.drive_modified_time is None
+
+
+def test_delete_job_requires_ownership_and_terminal_status(session):
+    a = repo.upsert_user(session, "a", None, None)
+    b = repo.upsert_user(session, "b", None, None)
+    done = repo.update_job(session, repo.create_job(session, a.id).id, status="done")
+    running = repo.create_job(session, a.id)
+    assert repo.delete_job(session, b.id, done.id) is False  # not owned by b
+    assert repo.get_job(session, a.id, done.id) is not None  # still there
+    assert repo.delete_job(session, a.id, running.id) is False  # not terminal
+    assert repo.get_job(session, a.id, running.id) is not None
+    assert repo.delete_job(session, a.id, done.id) is True
+    assert repo.get_job(session, a.id, done.id) is None
+    assert repo.delete_job(session, a.id, done.id) is False  # already gone
+    assert repo.delete_job(session, a.id, uuid.uuid4()) is False  # unknown id
+
+
 def test_fail_stale_jobs(session):
     u = repo.upsert_user(session, "a", None, None)
     q = repo.create_job(session, u.id)

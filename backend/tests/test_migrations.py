@@ -46,6 +46,14 @@ def test_upgrade_head_on_sqlite_creates_all_tables(tmp_path: Path):
         u["column_names"] for u in insp.get_unique_constraints("analyses")]
 
 
+def test_upgrade_head_adds_jobs_drive_retry_columns(tmp_path: Path):
+    """0002 adds the two nullable columns Drive job retry needs, on top of a fresh (empty) database."""
+    url = f"sqlite+pysqlite:///{tmp_path / 'm.db'}"
+    upgrade_to_head(url)
+    cols = {c["name"] for c in inspect(make_engine(url)).get_columns("jobs")}
+    assert {"drive_file_id", "drive_modified_time"} <= cols
+
+
 def test_upgrade_head_is_idempotent(tmp_path: Path):
     url = f"sqlite+pysqlite:///{tmp_path / 'm.db'}"
     upgrade_to_head(url)

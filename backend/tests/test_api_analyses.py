@@ -260,6 +260,9 @@ def test_drive_json_post_runner_failure_mid_batch_fails_the_whole_batch(tmp_path
         def __init__(self):
             self.calls = 0
 
+        def available(self):
+            return True  # the pre-batch check passes; the pool only dies mid-batch
+
         def submit(self, req):
             self.calls += 1
             if self.calls > 1:
@@ -279,6 +282,23 @@ def test_drive_json_post_runner_failure_mid_batch_fails_the_whole_batch(tmp_path
         jobs = _jobs_for(ctx)
         assert len(jobs) == 2
         assert {(j.status, j.error) for j in jobs} == {("failed", "job runner unavailable")}
+
+
+def test_drive_json_post_runner_unavailable_before_batch_is_503_with_zero_jobs(tmp_path, httpx_mock):
+    """`available()` is checked after metadata/type/size checks but before any job row is created."""
+    captured = []
+    app, ctx = make_test_app(tmp_path, job_fn=_capturing_job_fn(captured), settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        httpx_mock.add_response(url=oauth.TOKEN_URL, json={"access_token": "tok"})
+        _mock_get_file(httpx_mock, "f1", name="one.wav", modified_time="2026-10-01T00:00:00.000Z")
+        app.state.runner.available = lambda: False
+
+        r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": ["f1"]})
+
+        assert r.status_code == 503
+        assert r.json()["detail"] == "job runner unavailable"
+        assert captured == [] and _jobs_for(ctx) == []
 
 
 def test_drive_json_post_422_detail_lists_messages_only(tmp_path):

@@ -2952,6 +2952,48 @@
       }
     },
     "/api/jobs/{job_id}": {
+      "delete": {
+        "operationId": "dismiss_job_api_jobs__job_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "job not found, not owned by the caller, or not yet finished"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Dismiss Job",
+        "tags": [
+          "jobs"
+        ]
+      },
       "get": {
         "operationId": "get_job_api_jobs__job_id__get",
         "parameters": [
@@ -3075,10 +3117,10 @@
             "description": "job not found"
           },
           "409": {
-            "description": "job is not finished"
+            "description": "job is not finished, or Drive is not connected"
           },
           "410": {
-            "description": "the uploaded file is no longer stored, or the job is Drive-sourced"
+            "description": "the uploaded file, or the Drive file, is no longer available"
           },
           "422": {
             "content": {
@@ -3090,8 +3132,11 @@
             },
             "description": "Validation Error"
           },
+          "502": {
+            "description": "Google Drive returned an error"
+          },
           "503": {
-            "description": "job runner unavailable"
+            "description": "job runner unavailable, or Drive is not configured"
           }
         },
         "security": [

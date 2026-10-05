@@ -252,9 +252,11 @@ def set_coaching(
 
 def create_job(session: Session, user_id: uuid.UUID, *, file_name: str | None = None,
                source_sha256: str | None = None, recorded_at: datetime | None = None,
-               stage: str = FIRST_JOB_STAGE) -> Job:
+               stage: str = FIRST_JOB_STAGE, drive_file_id: str | None = None,
+               drive_modified_time: str | None = None) -> Job:
     job = Job(user_id=user_id, status="queued", stage=stage, progress_pct=PROGRESS_MIN,
-              file_name=file_name, source_sha256=source_sha256, recorded_at=recorded_at)
+              file_name=file_name, source_sha256=source_sha256, recorded_at=recorded_at,
+              drive_file_id=drive_file_id, drive_modified_time=drive_modified_time)
     session.add(job)
     _commit(session)
     return job
@@ -277,6 +279,17 @@ def update_job(session: Session, job_id: uuid.UUID, **fields) -> Job | None:
         setattr(job, k, v)
     _commit(session)
     return job
+
+
+def delete_job(session: Session, user_id: uuid.UUID, job_id: uuid.UUID) -> bool:
+    """Dismiss a job: deletes it only when it belongs to `user_id` and has finished (`done`/`failed`).
+    A non-terminal or unknown-or-foreign job is left alone and the caller gets False either way, so
+    the API cannot distinguish "not yours" from "not finished" from "does not exist"."""
+    result = session.execute(
+        delete(Job).where(Job.user_id == user_id, Job.id == job_id, Job.status.in_(TERMINAL_STATUSES))
+    )
+    _commit(session)
+    return result.rowcount == ROWS_PER_ID
 
 
 def list_jobs(session: Session, user_id: uuid.UUID, *, status: str | None = None,

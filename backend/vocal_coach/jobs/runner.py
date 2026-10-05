@@ -75,6 +75,16 @@ class JobRunner:
                 self._engine.dispose()
                 self._engine = None
 
+    def available(self) -> bool:
+        """True when a job could be submitted right now, without actually submitting one.
+
+        False when there is no executor, or the executor reports itself broken (the same
+        `_broken` flag `ProcessPoolExecutor.submit` checks before raising `BrokenProcessPool`).
+        A `SyncExecutor` has no such flag, so it is always available."""
+        if self._executor is None:
+            return False
+        return not getattr(self._executor, "_broken", False)
+
     def submit(self, req: JobRequest) -> Future:
         assert self._executor is not None and self._job_fn is not None
         try:

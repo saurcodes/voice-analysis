@@ -221,11 +221,15 @@ async def _create_drive_analyses(request: Request, user: CurrentUser, session: S
         if file.size > settings.max_upload_bytes:
             raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"file too large: {file.name}")
 
+    if not request.app.state.runner.available():
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "job runner unavailable")
+
     job_ids: list[uuid.UUID] = []
     for file in files:
         recorded_at = datetime.fromisoformat(file.modified_time.replace("Z", "+00:00"))
         path = drive_cache.cache_path(settings.data_dir, user.id, file)
-        job = repo.create_job(session, user.id, file_name=file.name, source_sha256=None, recorded_at=recorded_at)
+        job = repo.create_job(session, user.id, file_name=file.name, source_sha256=None, recorded_at=recorded_at,
+                              drive_file_id=file.id, drive_modified_time=file.modified_time)
         req = JobRequest(job_id=job.id, user_id=user.id, source_path=path, file_name=file.name,
                          recorded_at=recorded_at, drive_file_id=file.id, drive_modified_time=file.modified_time,
                          speaker_context=body.speaker_context, llm_enabled=body.llm.enabled,
