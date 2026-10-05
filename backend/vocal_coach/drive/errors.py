@@ -16,3 +16,7 @@ class DriveNotConfigured(DriveError):
 
 class DriveNotFound(DriveError):
     """File or folder not found / not readable."""
+
+
+class DriveStateError(DriveError):
+    """The OAuth `state` is tampered, expired, malformed, replayed, or not bound to this browser."""

@@ -27,7 +27,7 @@ def _drive_overrides(**extra) -> dict:
         "google_client_secret": "sec",
         "google_redirect_uri": "http://localhost:8000/api/drive/callback",
         "drive_token_key": crypto.generate_key(),
-        "secret_key": "s",
+        "secret_key": "test-secret-key-0123456789abcdefghij",
         **extra,
     }
 
@@ -166,8 +166,8 @@ def test_upload_validation(tmp_path):
         assert r.status_code == 413
         assert not list((tmp_path / "data" / "uploads").rglob("*"))  # partial upload removed
         r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": ["x"]})
-        assert r.status_code == 409
-        assert r.json()["detail"] == "drive_not_connected"
+        assert r.status_code == 503  # this server has no Google credentials
+        assert r.json()["detail"] == "drive is not configured on this server"
         assert client.post("/api/analyses", files={"file": ("a.wav", b"x", "audio/wav")}).status_code == 401
 
 
@@ -253,6 +253,18 @@ def test_drive_json_post_too_many_file_ids_is_422(tmp_path):
         r = client.post("/api/analyses", headers=ctx["auth"](),
                         json={"source": "drive", "file_ids": [f"f{i}" for i in range(21)]})
         assert r.status_code == 422
+
+
+@pytest.mark.parametrize("bad_id", ["a/b", "../etc", "a b", "x" * 201, "", "id?alt=media"])
+def test_drive_json_post_malformed_file_id_is_422_without_calling_google(tmp_path, httpx_mock, bad_id):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn, settings_overrides=_drive_overrides())
+    with TestClient(app) as client:
+        _connect_drive(ctx)
+        r = client.post("/api/analyses", headers=ctx["auth"](), json={"source": "drive", "file_ids": [bad_id]})
+        assert r.status_code == 422
+        assert not httpx_mock.get_requests()
+        with ctx["session_factory"]() as s:
+            assert repo.list_jobs(s, repo.upsert_user(s, "user-1", None, None).id) == []
 
 
 def test_drive_json_post_invalid_source_is_422(tmp_path):

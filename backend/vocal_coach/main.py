@@ -14,6 +14,8 @@ from vocal_coach.analysis.audio import check_ffmpeg
 from vocal_coach.api import analyses, comparisons, config_public, drive, jobs, llm, me
 from vocal_coach.auth.jwt import AuthError, JWKSCache
 from vocal_coach.config import AppConfig, load_config
+from vocal_coach.drive import service as drive_service
+from vocal_coach.drive.state import ConsumedNonces
 from vocal_coach.jobs.runner import JobRunner
 from vocal_coach.settings import Settings, get_settings
 from vocal_coach.storage import repo
@@ -36,6 +38,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         if settings.require_ffmpeg:
             check_ffmpeg()
+        drive_service.check_drive_settings(settings)
         nonlocal engine, runner, jwks
         if engine is None:
             if run_migrations:
@@ -60,6 +63,7 @@ def create_app(
             runner.stop()
 
     app = FastAPI(title="Vocal Coach API", lifespan=lifespan)
+    app.state.drive_nonces = ConsumedNonces()  # single-use OAuth states (api/drive.py callback)
     app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin], allow_credentials=True,
                        allow_methods=["*"], allow_headers=["*"])
 

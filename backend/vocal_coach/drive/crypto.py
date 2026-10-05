@@ -14,7 +14,7 @@ def encrypt_token(key: str, token: str) -> bytes:
 def decrypt_token(key: str, blob: bytes) -> str:
     try:
         return Fernet(key.encode()).decrypt(blob).decode()
-    except InvalidToken as exc:
+    except (InvalidToken, ValueError) as exc:  # ValueError: the key itself is not a Fernet key
         raise DriveError("stored token cannot be decrypted") from exc
 
 

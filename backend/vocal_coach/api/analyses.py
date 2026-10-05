@@ -15,17 +15,17 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import Response as RawResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, StringConstraints, ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from vocal_coach.analysis.schema import MetricsReport
 from vocal_coach.auth.deps import CurrentUser, get_current_user, get_session
-from vocal_coach.api.drive import drive_http_error
+from vocal_coach.api.drive import DRIVE_ID_PATTERN, drive_http_error
 from vocal_coach.api.jobs import submit_or_503
 from vocal_coach.drive import cache as drive_cache
 from vocal_coach.drive import service as drive_service
@@ -57,7 +57,7 @@ class LlmOptions(BaseModel):
 
 class DriveAnalysisRequest(BaseModel):
     source: Literal["drive"]
-    file_ids: list[str] = Field(min_length=1, max_length=20)
+    file_ids: list[Annotated[str, StringConstraints(pattern=DRIVE_ID_PATTERN)]] = Field(min_length=1, max_length=20)
     speaker_context: str | None = Field(default=None, max_length=SPEAKER_CONTEXT_MAX_CHARS)
     llm: LlmOptions = Field(default_factory=LlmOptions)
 

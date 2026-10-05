@@ -157,6 +157,15 @@ def test_get_file_401_raises_drive_not_connected(httpx_mock):
         _client().get_file("file-1")
 
 
+def test_get_file_non_json_body_raises_drive_error(httpx_mock):
+    httpx_mock.add_response(url=httpx.URL(f"{DRIVE_API}/abc", params={"fields": "id,name,mimeType,modifiedTime,size"}),
+                            text="<html>proxy error</html>")
+
+    with pytest.raises(DriveError, match="google drive returned an invalid response") as exc_info:
+        _client().get_file("abc")
+    assert "html" not in str(exc_info.value)
+
+
 def test_get_file_size_missing_is_none(httpx_mock):
     body = _file_json("file-1", "take.m4a")
     del body["size"]

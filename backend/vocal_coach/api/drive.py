@@ -1,26 +1,35 @@
 """Per-user Google Drive OAuth: connect, callback, disconnect, and file listing.
 
 `/drive/callback` is the one route with no bearer auth dependency: the browser arrives here by a
-Google redirect, not an API call, so the signed `state` (bound to the user who started the flow)
-is the only thing authenticating this request."""
+Google redirect, not an API call. It is authenticated by the signed `state` (bound to the user who
+started the flow) together with the `vc_drive_oauth` HttpOnly cookie that `/drive/connect` set to
+the state's nonce, which binds the flow to the browser that started it (login-CSRF). Each state
+is single-use."""
 from __future__ import annotations
 
 import asyncio
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from vocal_coach.auth.deps import CurrentUser, get_current_user, get_session
 from vocal_coach.drive import service
 from vocal_coach.drive.client import DriveFile
-from vocal_coach.drive.errors import DriveError, DriveNotConfigured, DriveNotConnected, DriveNotFound
-from vocal_coach.drive.state import INVALID_STATE_MESSAGE
+from vocal_coach.drive.errors import (
+    DriveError, DriveNotConfigured, DriveNotConnected, DriveNotFound, DriveStateError,
+)
+from vocal_coach.drive.state import INVALID_STATE_MESSAGE, STATE_MAX_AGE_S
 
 router = APIRouter(prefix="/drive", tags=["drive"])
 
 NOT_CONNECTED = "drive_not_connected"
+OAUTH_COOKIE = "vc_drive_oauth"
+OAUTH_COOKIE_PATH = "/api/drive/callback"
+DRIVE_ID_PATTERN = r"^[A-Za-z0-9_-]{1,200}$"
+_DRIVE_ID_RE = re.compile(DRIVE_ID_PATTERN)
 
 
 class ConnectUrl(BaseModel):
@@ -56,13 +65,30 @@ def drive_http_error(e: DriveError) -> HTTPException:
     "/connect", response_model=ConnectUrl,
     responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "drive is not configured on this server"}},
 )
-def connect(request: Request, user: CurrentUser = Depends(get_current_user)) -> ConnectUrl:
+def connect(request: Request, response: Response, user: CurrentUser = Depends(get_current_user)) -> ConnectUrl:
     settings = request.app.state.settings
     try:
-        url = service.start_connect(settings, user.id)
+        url, nonce = service.start_connect(settings, user.id)
     except DriveError as e:
         raise drive_http_error(e) from None
+    response.set_cookie(OAUTH_COOKIE, nonce, max_age=STATE_MAX_AGE_S, path=OAUTH_COOKIE_PATH,
+                        secure=_secure_cookie(settings), httponly=True, samesite="lax")
     return ConnectUrl(url=url)
+
+
+def _secure_cookie(settings) -> bool:
+    return settings.frontend_origin.startswith("https")
+
+
+def _clear_cookie(response: Response, settings) -> Response:
+    response.delete_cookie(OAUTH_COOKIE, path=OAUTH_COOKIE_PATH, secure=_secure_cookie(settings),
+                           httponly=True, samesite="lax")
+    return response
+
+
+def _invalid_state(settings) -> JSONResponse:
+    return _clear_cookie(JSONResponse({"detail": INVALID_STATE_MESSAGE}, status_code=status.HTTP_400_BAD_REQUEST),
+                         settings)
 
 
 @router.get(
@@ -75,25 +101,34 @@ def connect(request: Request, user: CurrentUser = Depends(get_current_user)) -> 
 )
 async def callback(
     request: Request, code: str | None = None, state: str | None = None, error: str | None = None,
-) -> RedirectResponse:
+) -> Response:
     settings = request.app.state.settings
     if error == "access_denied":
-        return RedirectResponse(f"{settings.frontend_origin}/settings?drive=cancelled", status_code=status.HTTP_303_SEE_OTHER)
+        return _clear_cookie(RedirectResponse(f"{settings.frontend_origin}/settings?drive=cancelled",
+                                              status_code=status.HTTP_303_SEE_OTHER), settings)
     if not code or not state:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_STATE_MESSAGE)
+        return _invalid_state(settings)
+    try:
+        user_id, nonce = service.verify_callback_state(settings, state)
+    except DriveStateError:
+        return _invalid_state(settings)
+    if request.cookies.get(OAUTH_COOKIE) != nonce:
+        return _invalid_state(settings)
+    if not request.app.state.drive_nonces.consume(nonce):
+        return _invalid_state(settings)
     session_factory = request.app.state.session_factory
 
     def _run() -> None:
         with session_factory() as session:
-            service.complete_connect(session, settings, code=code, state=state)
+            service.complete_connect(session, settings, code=code, user_id=user_id)
 
     try:
         await asyncio.to_thread(_run)
     except DriveError as e:
-        if str(e) == INVALID_STATE_MESSAGE:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_STATE_MESSAGE) from None
-        raise drive_http_error(e) from None
-    return RedirectResponse(f"{settings.frontend_origin}/settings?drive=connected", status_code=status.HTTP_303_SEE_OTHER)
+        http_error = drive_http_error(e)
+        return _clear_cookie(JSONResponse({"detail": http_error.detail}, status_code=http_error.status_code), settings)
+    return _clear_cookie(RedirectResponse(f"{settings.frontend_origin}/settings?drive=connected",
+                                          status_code=status.HTTP_303_SEE_OTHER), settings)
 
 
 @router.delete(
@@ -124,6 +159,8 @@ async def list_files(
     user: CurrentUser = Depends(get_current_user), session: Session = Depends(get_session),
 ) -> list[DriveFileOut]:
     settings = request.app.state.settings
+    if folder_id is not None and folder_id != "root" and not _DRIVE_ID_RE.fullmatch(folder_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "folder not found")
     try:
         files = await asyncio.to_thread(service.list_files, session, settings, user.id, folder_id)
     except DriveError as e:

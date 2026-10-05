@@ -133,7 +133,10 @@ class DriveClient:
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise DriveError("google drive connection error") from exc
         self._raise_for_status(response, not_found=not_found)
-        return response.json()
+        try:
+            return response.json()
+        except ValueError as exc:  # never echo the body
+            raise DriveError("google drive returned an invalid response") from exc
 
     def _raise_for_status(self, response: httpx.Response, *, not_found: str) -> None:
         if response.status_code == 401:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from cryptography.fernet import Fernet
 from sqlalchemy.orm import Session
 
 from vocal_coach.drive import crypto, oauth
@@ -15,6 +16,8 @@ from vocal_coach.settings import Settings
 from vocal_coach.storage import repo
 
 NOT_CONFIGURED = "drive is not configured on this server"
+DEFAULT_SECRET_KEY = "dev-secret-change-me"
+MIN_SECRET_KEY_CHARS = 32
 
 
 def require_configured(settings: Settings) -> None:
@@ -22,36 +25,69 @@ def require_configured(settings: Settings) -> None:
         raise DriveNotConfigured(NOT_CONFIGURED)
 
 
-def start_connect(settings: Settings, user_id: uuid.UUID) -> str:
+def check_drive_settings(settings: Settings) -> None:
+    """Startup guard: with Drive configured, refuse a guessable `SECRET_KEY` (it signs the OAuth
+    state) and a `DRIVE_TOKEN_KEY` that is not a Fernet key. Messages never echo either value."""
+    if not settings.drive_configured:
+        return
+    secret = settings.secret_key or ""
+    if not secret or secret == DEFAULT_SECRET_KEY or len(secret) < MIN_SECRET_KEY_CHARS:
+        raise RuntimeError(
+            f"SECRET_KEY must be set to a random value of at least {MIN_SECRET_KEY_CHARS} characters "
+            "when Google Drive is configured")
+    try:
+        Fernet(settings.drive_token_key.encode())
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError("DRIVE_TOKEN_KEY is not a valid Fernet key") from exc
+
+
+def start_connect(settings: Settings, user_id: uuid.UUID) -> tuple[str, str]:
+    """Returns `(consent_url, nonce)`; the caller sets the nonce as the browser-binding cookie."""
     require_configured(settings)
-    state = oauth_state.sign_state(settings.secret_key, user_id)
-    return oauth.consent_url(settings, state)
+    nonce = oauth_state.new_nonce()
+    state = oauth_state.sign_state(settings.secret_key, user_id, nonce)
+    return oauth.consent_url(settings, state), nonce
 
 
-def complete_connect(session: Session, settings: Settings, *, code: str, state: str) -> uuid.UUID:
-    user_id = oauth_state.verify_state(settings.secret_key, state)
+def verify_callback_state(settings: Settings, state: str) -> tuple[uuid.UUID, str]:
+    """`(user_id, nonce)` from a signed state; raises `DriveStateError` when it does not verify."""
+    return oauth_state.verify_state(settings.secret_key, state)
+
+
+def complete_connect(session: Session, settings: Settings, *, code: str, user_id: uuid.UUID) -> None:
+    """Exchanges the code and stores the connection for `user_id` (taken from an already verified
+    state). A previous connection's refresh token is revoked first, best effort."""
     require_configured(settings)
     exchange = oauth.exchange_code(settings, code)
+    previous = repo.get_drive_connection(session, user_id)
+    if previous is not None:
+        _revoke_stored(settings, previous.encrypted_refresh_token)
     encrypted = crypto.encrypt_token(settings.drive_token_key, exchange.refresh_token)
     repo.upsert_drive_connection(session, user_id, encrypted_refresh_token=encrypted, google_email=exchange.email)
-    return user_id
+
+
+def _revoke_stored(settings: Settings, blob: bytes) -> None:
+    """Best effort: no key, or an unreadable token, just skips the revoke."""
+    if not settings.drive_token_key:
+        return
+    try:
+        token = crypto.decrypt_token(settings.drive_token_key, blob)
+    except DriveError:
+        return
+    oauth.revoke(token)  # never raises
 
 
 def disconnect(session: Session, settings: Settings, user_id: uuid.UUID) -> bool:
     row = repo.get_drive_connection(session, user_id)
     if row is None:
         return False
-    try:
-        token = crypto.decrypt_token(settings.drive_token_key, row.encrypted_refresh_token)
-    except DriveError:
-        token = None  # stored token is unreadable; still remove the row below
-    if token is not None:
-        oauth.revoke(token)  # best effort; never raises
+    _revoke_stored(settings, row.encrypted_refresh_token)
     repo.delete_drive_connection(session, user_id)
     return True
 
 
 def access_token_for(session: Session, settings: Settings, user_id: uuid.UUID) -> str:
+    require_configured(settings)
     row = repo.get_drive_connection(session, user_id)
     if row is None:
         raise DriveNotConnected("drive_not_connected")

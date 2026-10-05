@@ -1,10 +1,12 @@
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.api_fixtures import make_test_app
 from tests.auth_keys import mint
 from vocal_coach.config import load_config
+from vocal_coach.drive import crypto
 from vocal_coach.storage import repo
 
 
@@ -101,3 +103,38 @@ def test_cors_allows_frontend_origin(tmp_path):
         r = client.options("/api/me", headers={"Origin": ctx["settings"].frontend_origin,
                                                "Access-Control-Request-Method": "GET"})
         assert r.headers.get("access-control-allow-origin") == ctx["settings"].frontend_origin
+
+
+STRONG_SECRET = "x" * 32
+
+
+def _drive_settings(**extra) -> dict:
+    return {"google_client_id": "cid", "google_client_secret": "sec", "drive_token_key": crypto.generate_key(),
+            "secret_key": STRONG_SECRET, **extra}
+
+
+@pytest.mark.parametrize("overrides, message", [
+    ({"secret_key": ""}, "SECRET_KEY"),
+    ({"secret_key": "dev-secret-change-me"}, "SECRET_KEY"),
+    ({"secret_key": "x" * 31}, "SECRET_KEY"),
+    ({"drive_token_key": "not-a-fernet-key"}, "DRIVE_TOKEN_KEY"),
+])
+def test_startup_refuses_weak_secrets_when_drive_configured(tmp_path, overrides, message):
+    app, _ctx = make_test_app(tmp_path, settings_overrides=_drive_settings(**overrides))
+    with pytest.raises(RuntimeError, match=message) as exc_info:
+        with TestClient(app):
+            pass
+    assert "not-a-fernet-key" not in str(exc_info.value) and "dev-secret" not in str(exc_info.value)
+
+
+def test_startup_accepts_strong_secrets_when_drive_configured(tmp_path):
+    app, ctx = make_test_app(tmp_path, settings_overrides=_drive_settings())
+    with TestClient(app) as client:
+        assert client.get("/api/me", headers=ctx["auth"]()).json()["drive_configured"] is True
+
+
+def test_startup_allows_default_secret_when_drive_unconfigured(tmp_path):
+    app, ctx = make_test_app(tmp_path)  # default SECRET_KEY, no Google credentials
+    assert ctx["settings"].secret_key == "dev-secret-change-me"
+    with TestClient(app) as client:
+        assert client.get("/api/me", headers=ctx["auth"]()).status_code == 200

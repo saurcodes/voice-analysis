@@ -5,32 +5,46 @@ import httpx
 import pytest
 
 from vocal_coach.drive import crypto, oauth, state
-from vocal_coach.drive.errors import DriveError, DriveNotConnected
+from vocal_coach.drive.errors import DriveError, DriveNotConnected, DriveStateError
 from vocal_coach.settings import Settings
 
 
 def test_state_round_trip_and_tamper():
     uid = uuid.uuid4()
-    s = state.sign_state("k", uid)
-    assert state.verify_state("k", s) == uid
-    with pytest.raises(DriveError, match="invalid or expired state"):
+    nonce = state.new_nonce()
+    s = state.sign_state("k", uid, nonce)
+    assert state.verify_state("k", s) == (uid, nonce)
+    with pytest.raises(DriveStateError, match="invalid or expired state"):
         state.verify_state("k", s[:-2] + "xx")
-    with pytest.raises(DriveError):
+    with pytest.raises(DriveStateError):
         state.verify_state("other-key", s)
+
+
+def test_state_error_is_a_drive_error():
+    assert issubclass(DriveStateError, DriveError)
 
 
 def test_state_expired(monkeypatch):
     import itsdangerous
     uid = uuid.uuid4()
-    s = state.sign_state("k", uid)
-    real = itsdangerous.URLSafeTimedSerializer.loads
+    s = state.sign_state("k", uid, state.new_nonce())
 
     def expired(self, value, max_age=None, **kw):
         raise itsdangerous.SignatureExpired("old")
 
     monkeypatch.setattr(itsdangerous.URLSafeTimedSerializer, "loads", expired)
-    with pytest.raises(DriveError, match="invalid or expired state"):
+    with pytest.raises(DriveStateError, match="invalid or expired state"):
         state.verify_state("k", s)
+
+
+def test_consumed_nonces_single_use_and_expiry():
+    now = [1000.0]
+    ledger = state.ConsumedNonces(ttl_s=600, clock=lambda: now[0])
+    assert ledger.consume("a") is True
+    assert ledger.consume("a") is False
+    assert ledger.consume("b") is True
+    now[0] += 601
+    assert ledger.consume("a") is True  # forgotten after the state itself would have expired
 
 
 def test_token_encrypt_decrypt_round_trip():
@@ -80,6 +94,31 @@ def test_exchange_code_posts_form_and_returns_tokens_and_email(httpx_mock):
     }
     userinfo_request = httpx_mock.get_requests(url=oauth.USERINFO_URL)[0]
     assert userinfo_request.headers["Authorization"] == "Bearer access-tok"
+
+
+def test_exchange_code_without_drive_scope_raises_drive_error(httpx_mock):
+    httpx_mock.add_response(url=oauth.TOKEN_URL, json={
+        "refresh_token": "1//refresh", "access_token": "tok",
+        "scope": "https://www.googleapis.com/auth/userinfo.email openid",
+    })
+
+    with pytest.raises(DriveError, match="drive access was not granted"):
+        oauth.exchange_code(_settings(), "auth-code")
+
+
+def test_exchange_code_with_drive_scope_in_scope_field_succeeds(httpx_mock):
+    httpx_mock.add_response(url=oauth.TOKEN_URL, json={
+        "refresh_token": "1//refresh", "access_token": "tok", "scope": " ".join(oauth.SCOPES),
+    })
+    httpx_mock.add_response(url=oauth.USERINFO_URL, json={"email": "singer@example.com"})
+
+    assert oauth.exchange_code(_settings(), "auth-code").refresh_token == "1//refresh"
+
+
+def test_decrypt_with_malformed_key_raises_drive_error():
+    blob = crypto.encrypt_token(crypto.generate_key(), "1//refresh")
+    with pytest.raises(DriveError):
+        crypto.decrypt_token("not-a-fernet-key", blob)
 
 
 def test_exchange_code_missing_refresh_token_raises_drive_error(httpx_mock):

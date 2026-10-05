@@ -913,6 +913,7 @@
         "properties": {
           "file_ids": {
             "items": {
+              "pattern": "^[A-Za-z0-9_-]{1,200}$",
               "type": "string"
             },
             "maxItems": 20,

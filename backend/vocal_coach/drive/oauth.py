@@ -18,7 +18,8 @@ AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
-SCOPES = ("https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/userinfo.email")
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+SCOPES = (DRIVE_SCOPE, "https://www.googleapis.com/auth/userinfo.email")
 _DEFAULT_TIMEOUT = httpx.Timeout(10.0, read=30.0)
 _CONNECTION_ERROR = "google token connection error"
 
@@ -72,6 +73,9 @@ def exchange_code(settings: Settings, code: str) -> TokenExchange:
         if not (200 <= response.status_code < 300):
             raise DriveError(f"google token error {response.status_code}")
         data = response.json()
+        granted = data.get("scope")
+        if isinstance(granted, str) and DRIVE_SCOPE not in granted.split():
+            raise DriveError("drive access was not granted")
         refresh_token = data.get("refresh_token")
         if not refresh_token:
             raise DriveError("google did not return a refresh token")
