@@ -391,6 +391,50 @@ def test_failed_job_is_visible(tmp_path):
         assert job["status"] == "failed" and job["error"] == "boom"
 
 
+def test_chunked_upload_with_no_content_length_over_cap_is_413_with_no_partial_file(tmp_path):
+    """Review Focus 2: a body with no `Content-Length` (so `_reject_if_declared_too_large`'s fast
+    path cannot fire) that exceeds the cap still gets a 413 from `_store_upload`'s own byte count,
+    and leaves no partial file (no `.part`/`.tmp`, no final upload) under `uploads/`."""
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn, max_upload_mb=1)
+    boundary = "testboundary123"
+    big = b"\0" * (1024 * 1024 + int(0.5 * 1024 * 1024))  # 1.5 MiB, over the 1 MiB cap
+    body = (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="big.wav"\r\n'
+        f"Content-Type: audio/wav\r\n\r\n"
+    ).encode() + big + f"\r\n--{boundary}--\r\n".encode()
+
+    def chunks():
+        step = 64 * 1024
+        for i in range(0, len(body), step):
+            yield body[i:i + step]
+
+    with TestClient(app) as client:
+        headers = {**ctx["auth"](), "content-type": f"multipart/form-data; boundary={boundary}"}
+        r = client.post("/api/analyses", content=chunks(), headers=headers)
+        assert "content-length" not in {k.lower() for k in r.request.headers}  # sanity: no declared size
+        assert r.status_code == 413
+        assert not list((tmp_path / "data" / "uploads").rglob("*"))
+
+
+def test_upload_returns_503_before_storing_when_runner_unavailable(tmp_path):
+    class UnavailableRunner:
+        def available(self):
+            return False
+
+        def submit(self, req):
+            raise AssertionError("submit must not be called when the runner reports unavailable")
+
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        app.state.runner = UnavailableRunner()
+        r = _upload(client, ctx["auth"]())
+        assert r.status_code == 503 and r.json()["detail"] == "job runner unavailable"
+        assert _uploads(tmp_path) == []
+        with ctx["session_factory"]() as s:
+            user = repo.upsert_user(s, "user-1", None, None)
+            assert repo.list_jobs(s, user.id) == []
+
+
 def test_upload_returns_503_and_fails_job_when_runner_unavailable(tmp_path):
     from vocal_coach.jobs.runner import RunnerUnavailable
 

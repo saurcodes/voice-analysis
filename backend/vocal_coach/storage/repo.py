@@ -206,6 +206,34 @@ def count_source_refs(session: Session, user_id: uuid.UUID, source_sha256: str) 
     return int(analyses) + int(jobs)  # COUNT(*) is never NULL
 
 
+def delete_analysis_and_count_refs(
+    session: Session, user_id: uuid.UUID, analysis_id: uuid.UUID, source_sha256: str | None,
+) -> tuple[bool, int]:
+    """Delete one analysis and, in the same transaction, count what still references its upload
+    (`source_sha256`): the caller uses the count to decide whether to remove the upload file.
+
+    Doing both under one transaction (instead of `delete_analysis` then a separate `count_source_refs`,
+    which used to commit and release in between) closes a race with a concurrent retry that creates a
+    new job for the same hash: on Postgres, the user's analyses rows sharing `source_sha256` are
+    locked with `SELECT ... FOR UPDATE` before the delete and the count, so a concurrent transaction
+    touching those same rows (e.g. another delete of an analysis made from the same bytes) serialises
+    against this one rather than interleaving with it. SQLite has no row locking (and the tests that
+    run against it are single-threaded), so the lock is skipped there.
+    """
+    locking = source_sha256 is not None and session.bind.dialect.name != "sqlite"
+    if locking:
+        session.execute(
+            select(Analysis.id)
+            .where(Analysis.user_id == user_id, Analysis.source_sha256 == source_sha256)
+            .with_for_update()
+        )
+    result = session.execute(delete(Analysis).where(Analysis.user_id == user_id, Analysis.id == analysis_id))
+    deleted = result.rowcount == ROWS_PER_ID
+    refs = count_source_refs(session, user_id, source_sha256) if source_sha256 else 0
+    _commit(session)
+    return deleted, refs
+
+
 def previous_analysis(
     session: Session, user_id: uuid.UUID, *, before: datetime, exclude_id: uuid.UUID,
 ) -> Analysis | None:

@@ -32,6 +32,7 @@ from vocal_coach.drive import service as drive_service
 from vocal_coach.drive.client import DriveClient, DriveFile, MEDIA_EXTENSIONS as ALLOWED_EXTENSIONS
 from vocal_coach.drive.errors import DriveError
 from vocal_coach.pipeline import JobRequest
+from vocal_coach.settings import BYTES_PER_MB
 from vocal_coach.storage import paths, repo
 from vocal_coach.storage.repo import AnalysisSummary
 from vocal_coach.transcription.schema import Transcript
@@ -139,7 +140,8 @@ async def _store_upload(file: UploadFile, data_dir: Path, user_id: uuid.UUID, ma
             while chunk := await file.read(UPLOAD_CHUNK_BYTES):
                 size += len(chunk)
                 if size > max_bytes:
-                    raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"file exceeds {max_bytes} bytes")
+                    max_mb = max_bytes // BYTES_PER_MB
+                    raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"file too large (max {max_mb} MB)")
                 digest.update(chunk)
                 out.write(chunk)
     except BaseException:
@@ -159,6 +161,37 @@ async def _store_upload(file: UploadFile, data_dir: Path, user_id: uuid.UUID, ma
     else:
         tmp.replace(final)
     return final, sha, size
+
+
+def _runner_available(runner: object) -> bool:
+    """True unless the job runner cannot currently accept work.
+
+    Prefers the runner's own `available()` (Task 1, Plan 8: `JobRunner.available()`); until that
+    lands, falls back to checking its executor directly so this pre-check works without editing
+    `vocal_coach.jobs.runner` (owned by a concurrent implementer in this worktree). A runner object
+    with neither attribute (e.g. a minimal test double) is treated as available.
+    """
+    check = getattr(runner, "available", None)
+    if callable(check):
+        return bool(check())
+    return getattr(runner, "_executor", True) is not None
+
+
+def _create_upload_job(
+    session_factory, request: Request, user_id: uuid.UUID, *, file_name: str, source_sha256: str,
+    recorded_at: datetime, source_path: Path, speaker_context: str | None, llm_enabled: bool, llm_model: str | None,
+) -> uuid.UUID:
+    """Create the job row and hand it to the runner off the event loop (mirrors `/coach` in api/llm.py):
+    opens its own session so it is safe to run via `asyncio.to_thread` without sharing the request's
+    (not thread-safe) session."""
+    with session_factory() as session:
+        job = repo.create_job(session, user_id, file_name=file_name, source_sha256=source_sha256,
+                              recorded_at=recorded_at)
+        req = JobRequest(job_id=job.id, user_id=user_id, source_path=source_path, file_name=file_name,
+                         recorded_at=recorded_at, speaker_context=speaker_context,
+                         llm_enabled=llm_enabled, llm_model=llm_model, source_sha256=source_sha256)
+        submit_or_503(request, session, job.id, req)
+        return job.id
 
 
 # The route reads the body itself (multipart so it can 413 before parsing, or raw JSON for the Drive
@@ -270,15 +303,19 @@ async def create_analysis(
         ext = Path(file.filename or "").suffix.lower().lstrip(".")
         if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"unsupported file type .{ext}; allowed: {sorted(ALLOWED_EXTENSIONS)}")
+        if not _runner_available(request.app.state.runner):
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "job runner unavailable")
         settings = request.app.state.settings
         path, sha, _size = await _store_upload(file, settings.data_dir, user.id, settings.max_upload_bytes)
         file_name = Path(file.filename or "").name or path.name  # strip any client-side directories
-        job = repo.create_job(session, user.id, file_name=file_name, source_sha256=sha, recorded_at=recorded_at)
-        req = JobRequest(job_id=job.id, user_id=user.id, source_path=path, file_name=file_name,
-                         recorded_at=recorded_at, speaker_context=speaker_context,
-                         llm_enabled=llm_enabled, llm_model=llm_model, source_sha256=sha)
-        submit_or_503(request, session, job.id, req)
-        return JobIds(job_ids=[job.id])
+        # Off the event loop, like /coach: a fresh session for the worker thread, since the
+        # request's session is not thread-safe to share.
+        job_id = await asyncio.to_thread(
+            _create_upload_job, request.app.state.session_factory, request, user.id, file_name=file_name,
+            source_sha256=sha, recorded_at=recorded_at, source_path=path, speaker_context=speaker_context,
+            llm_enabled=llm_enabled, llm_model=llm_model,
+        )
+        return JobIds(job_ids=[job_id])
 
 
 @router.get("/analyses", response_model=list[AnalysisSummary])
@@ -321,9 +358,9 @@ def delete_analysis(analysis_id: uuid.UUID, request: Request, user: CurrentUser 
     if row is None:
         raise HTTPException(404, "analysis not found")
     source_sha = row.source_sha256  # the upload's name; content_sha256 is the extracted WAV's hash
-    repo.delete_analysis(session, user.id, analysis_id)
+    _deleted, refs = repo.delete_analysis_and_count_refs(session, user.id, analysis_id, source_sha)
     # Drive-sourced analyses have no source_sha256; the cached download is left in place here
     # (bounded by Plan 8's cache cleanup), not removed on delete.
-    if source_sha and not repo.count_source_refs(session, user.id, source_sha):
+    if source_sha and not refs:
         paths.remove_upload(request.app.state.settings.data_dir, user.id, source_sha)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

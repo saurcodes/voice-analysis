@@ -732,6 +732,20 @@
             "title": "Config Mismatch",
             "type": "boolean"
           },
+          "file_names": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "File Names",
+            "type": "array"
+          },
           "recorded_at": {
             "items": {
               "format": "date-time",
@@ -761,6 +775,7 @@
         "required": [
           "analysis_ids",
           "recorded_at",
+          "file_names",
           "config_mismatch",
           "analyser_version_mismatch",
           "rows",

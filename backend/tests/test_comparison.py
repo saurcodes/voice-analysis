@@ -162,3 +162,54 @@ def test_naive_recorded_at_rejected():
     with pytest.raises(ValueError):
         ComparableAnalysis(id="x", recorded_at=datetime(2026, 10, 1), config_hash="c", analyser_version="0.1.0",
                            metrics={}, transcript=None)
+
+
+def test_file_names_filled_in_recorded_at_order():
+    a = _a(1, _m(), day=1)
+    a.file_name = "second.wav"
+    b = _a(2, _m(), day=0)
+    b.file_name = "first.wav"
+    r = compare([a, b], CFG)
+    assert r.analysis_ids == ["a2", "a1"]
+    assert r.file_names == ["first.wav", "second.wav"]
+
+
+def test_file_name_defaults_to_none():
+    r = compare([_a(1, _m()), _a(2, _m(), day=1)], CFG)
+    assert r.file_names == [None, None]
+
+
+def test_near_zero_delta_at_default_precision_is_unchanged_even_if_percentage_significant():
+    # Default precision is 1 decimal. -0.04 rounds to 0.0 (unchanged); -0.06 rounds to -0.1 (not
+    # near-zero), so it falls through to the percentage rule and should read as worsened for an
+    # up_good metric with a small baseline where the percentage threshold does not save it.
+    cfg = ComparisonConfig(min_meaningful_change_pct=5, directions={"pitch.f0_range_st": "up_good"})
+    small_change = compare(_f0(1.00, 0.96), cfg)
+    assert _f0_row(small_change).verdict == "unchanged" and _f0_row(small_change).delta == pytest.approx(-0.04)
+    bigger_change = compare(_f0(1.00, 0.94), cfg)
+    row = _f0_row(bigger_change)
+    assert row.delta == pytest.approx(-0.06) and row.verdict == "worsened" and row.arrow == "↓"
+
+
+def test_modulation_depth_uses_two_decimal_precision():
+    cfg = ComparisonConfig(min_meaningful_change_pct=5, directions={"articulation.modulation_depth": "up_good"})
+
+    def _mod(a, b):
+        return compare(
+            [_a(1, {"articulation": {"modulation_depth": a}}), _a(2, {"articulation": {"modulation_depth": b}}, day=1)],
+            cfg,
+        )
+
+    unchanged = next(x for x in _mod(0.100, 0.096).rows if x.path == "articulation.modulation_depth")
+    assert unchanged.verdict == "unchanged" and unchanged.delta == pytest.approx(-0.004)
+    worsened = next(x for x in _mod(0.100, 0.094).rows if x.path == "articulation.modulation_depth")
+    assert worsened.verdict == "worsened" and worsened.delta == pytest.approx(-0.006)
+
+
+def test_count_metric_zero_delta_is_unchanged():
+    cfg = ComparisonConfig(min_meaningful_change_pct=5, directions={"energy.trailing_off_count": "down_good"})
+    r = compare(
+        [_a(1, {"energy": {"trailing_off_count": 3}}), _a(2, {"energy": {"trailing_off_count": 3}}, day=1)], cfg,
+    )
+    row = next(x for x in r.rows if x.path == "energy.trailing_off_count")
+    assert row.delta == 0.0 and row.verdict == "unchanged" and row.arrow == "→"

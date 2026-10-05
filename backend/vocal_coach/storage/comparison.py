@@ -15,6 +15,25 @@ ARROW_UP, ARROW_DOWN, ARROW_FLAT, ARROW_NA = "↑", "↓", "→", "—"
 PERCENT = 100.0
 MIN_POINTS = 2  # a change needs a start value and an end value; a mismatch needs two distinct values
 
+# Decimal places a metric is actually displayed at. A delta that rounds to 0.0 at this precision is
+# "unchanged" regardless of `min_meaningful_change_pct` (a tiny but percentage-significant wobble on
+# a near-zero metric should not read as improved/worsened). Count-like metrics (whole numbers) round
+# to 0 decimals; `modulation_depth` is shown to 2 decimals; everything else defaults to 1.
+DISPLAY_PRECISION: dict[str, int] = {
+    "articulation.modulation_depth": 2,
+    "phrasing.long_pause_count_ge_1s": 0,
+    "energy.trailing_off_count": 0,
+}
+DEFAULT_DISPLAY_PRECISION = 1
+
+
+def _display_precision(path: str) -> int:
+    if path in DISPLAY_PRECISION:
+        return DISPLAY_PRECISION[path]
+    if path.endswith("_count"):
+        return 0
+    return DEFAULT_DISPLAY_PRECISION
+
 
 class ComparableAnalysis(BaseModel):
     id: str
@@ -23,6 +42,7 @@ class ComparableAnalysis(BaseModel):
     analyser_version: str
     metrics: dict
     transcript: dict | None
+    file_name: str | None = None
 
     @field_validator("recorded_at")
     @classmethod
@@ -36,7 +56,7 @@ def from_row(row: Any) -> ComparableAnalysis:
     """Adapter from a storage.models.Analysis row (kept loose to avoid importing the ORM here)."""
     return ComparableAnalysis(id=str(row.id), recorded_at=row.recorded_at, config_hash=row.config_hash,
                               analyser_version=row.analyser_version, metrics=row.metrics_json,
-                              transcript=row.transcript_json)
+                              transcript=row.transcript_json, file_name=row.file_name)
 
 
 class ComparisonRow(BaseModel):
@@ -59,6 +79,7 @@ class TrendPoint(BaseModel):
 class ComparisonResult(BaseModel):
     analysis_ids: list[str]
     recorded_at: list[datetime]
+    file_names: list[str | None]
     config_mismatch: bool
     analyser_version_mismatch: bool
     rows: list[ComparisonRow]
@@ -92,9 +113,13 @@ def _sub(a: float | None, b: float | None) -> float | None:
     return None if a is None or b is None else float(a - b)
 
 
-def _verdict(first: float | None, delta: float | None, direction: Direction, pct: float) -> tuple[Verdict, str]:
+def _verdict(
+    first: float | None, delta: float | None, direction: Direction, pct: float, precision: int,
+) -> tuple[Verdict, str]:
     if first is None or delta is None:
         return "unavailable", ARROW_NA
+    if round(abs(delta), precision) == 0:  # near-zero at the metric's display precision: not a change
+        return "unchanged", ARROW_FLAT
     unchanged = (delta == 0) if first == 0 else (abs(delta) < (pct / PERCENT) * abs(first))
     arrow = ARROW_FLAT if (unchanged or delta == 0) else (ARROW_UP if delta > 0 else ARROW_DOWN)
     if unchanged:
@@ -117,13 +142,14 @@ def compare(analyses: list[ComparableAnalysis], cfg: ComparisonConfig) -> Compar
         available = [v for v in values if v is not None]
         first = available[0] if len(available) >= MIN_POINTS else None
         delta = _sub(available[-1], first) if first is not None else None
-        verdict, arrow = _verdict(first, delta, direction, cfg.min_meaningful_change_pct)
+        verdict, arrow = _verdict(first, delta, direction, cfg.min_meaningful_change_pct, _display_precision(path))
         rows.append(ComparisonRow(path=path, direction=direction, values=values, step_deltas=steps,
                                   delta=delta, arrow=arrow, verdict=verdict, partial=len(available) < len(values)))
         trend[path] = [TrendPoint(analysis_id=a.id, recorded_at=a.recorded_at, value=v) for a, v in zip(ordered, values)]
     return ComparisonResult(
         analysis_ids=[a.id for a in ordered],
         recorded_at=[a.recorded_at for a in ordered],
+        file_names=[a.file_name for a in ordered],
         config_mismatch=len({a.config_hash for a in ordered}) >= MIN_POINTS,
         analyser_version_mismatch=len({a.analyser_version for a in ordered}) >= MIN_POINTS,
         rows=rows,

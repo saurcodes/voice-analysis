@@ -28,6 +28,23 @@ def test_comparison_two_analyses(tmp_path):
         assert set(body["trend"]) == set(paths)
 
 
+def test_comparison_file_names_match_analysis_ids_order(tmp_path):
+    app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
+    with TestClient(app) as client:
+        headers = ctx["auth"]()
+        first_job = _upload(client, headers, name="r0.wav", data=_wav_bytes(1.0)).json()["job_ids"][0]
+        second_job = _upload(client, headers, name="r1.wav", data=_wav_bytes(1.2)).json()["job_ids"][0]
+        a = client.get(f"/api/jobs/{first_job}", headers=headers).json()["analysis_id"]
+        b = client.get(f"/api/jobs/{second_job}", headers=headers).json()["analysis_id"]
+
+        r = client.get(f"/api/comparisons?ids={a},{b}", headers=headers)
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["analysis_ids"] == [a, b]
+        assert body["file_names"] == ["r0.wav", "r1.wav"]
+
+
 def test_comparison_validation_and_scoping(tmp_path):
     app, ctx = make_test_app(tmp_path, job_fn=fake_job_fn)
     with TestClient(app) as client:
