@@ -62,6 +62,11 @@ class DriveAnalysisRequest(BaseModel):
     llm: LlmOptions = Field(default_factory=LlmOptions)
 
 
+# Request models FastAPI cannot see (the route parses the body itself); main.py adds them to
+# OpenAPI `components.schemas` so generated clients get named types.
+EXTRA_OPENAPI_MODELS: tuple[type[BaseModel], ...] = (DriveAnalysisRequest, LlmOptions)
+
+
 class AnalysisDetail(BaseModel):
     id: uuid.UUID
     file_name: str
@@ -171,7 +176,8 @@ UPLOAD_OPENAPI = {
                 "recorded_at": {"type": "string", "format": "date-time"},
             },
         }},
-        "application/json": {"schema": DriveAnalysisRequest.model_json_schema()},
+        # The model itself is registered under components.schemas by main.py's openapi override.
+        "application/json": {"schema": {"$ref": "#/components/schemas/DriveAnalysisRequest"}},
     }},
     "responses": {
         "404": {"description": "drive file not found"},

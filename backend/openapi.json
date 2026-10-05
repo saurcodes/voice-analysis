@@ -909,6 +909,46 @@
         "title": "DerivedBlock",
         "type": "object"
       },
+      "DriveAnalysisRequest": {
+        "properties": {
+          "file_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "File Ids",
+            "type": "array"
+          },
+          "llm": {
+            "$ref": "#/components/schemas/LlmOptions"
+          },
+          "source": {
+            "const": "drive",
+            "title": "Source",
+            "type": "string"
+          },
+          "speaker_context": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speaker Context"
+          }
+        },
+        "required": [
+          "source",
+          "file_ids"
+        ],
+        "title": "DriveAnalysisRequest",
+        "type": "object"
+      },
       "DriveFileOut": {
         "properties": {
           "id": {
@@ -1266,6 +1306,29 @@
           "models"
         ],
         "title": "LlmModels",
+        "type": "object"
+      },
+      "LlmOptions": {
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          }
+        },
+        "title": "LlmOptions",
         "type": "object"
       },
       "LowConfWord": {
@@ -2261,67 +2324,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$defs": {
-                  "LlmOptions": {
-                    "properties": {
-                      "enabled": {
-                        "default": false,
-                        "title": "Enabled",
-                        "type": "boolean"
-                      },
-                      "model": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ],
-                        "title": "Model"
-                      }
-                    },
-                    "title": "LlmOptions",
-                    "type": "object"
-                  }
-                },
-                "properties": {
-                  "file_ids": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "maxItems": 20,
-                    "minItems": 1,
-                    "title": "File Ids",
-                    "type": "array"
-                  },
-                  "llm": {
-                    "$ref": "#/$defs/LlmOptions"
-                  },
-                  "source": {
-                    "const": "drive",
-                    "title": "Source",
-                    "type": "string"
-                  },
-                  "speaker_context": {
-                    "anyOf": [
-                      {
-                        "maxLength": 2000,
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "title": "Speaker Context"
-                  }
-                },
-                "required": [
-                  "source",
-                  "file_ids"
-                ],
-                "title": "DriveAnalysisRequest",
-                "type": "object"
+                "$ref": "#/components/schemas/DriveAnalysisRequest"
               }
             },
             "multipart/form-data": {

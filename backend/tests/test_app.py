@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from tests.api_fixtures import make_test_app
@@ -78,6 +80,19 @@ def test_openapi_documents_the_contract_plan5_needs(tmp_path):
         assert {"202", "409", "410"} <= set(spec["paths"]["/api/jobs/{job_id}/retry"]["post"]["responses"])
         assert "/api/jobs" in spec["paths"]
         assert client.get("/api/me", headers=ctx["auth"]()).json()["llm_enabled"] is False
+
+
+def test_openapi_promotes_drive_request_models_to_components(tmp_path):
+    app, _ctx = make_test_app(tmp_path, cfg=_llm_disabled_cfg())
+    with TestClient(app) as client:
+        spec = client.get("/openapi.json").json()
+    schemas = spec["components"]["schemas"]
+    assert "DriveAnalysisRequest" in schemas and "LlmOptions" in schemas
+    assert schemas["DriveAnalysisRequest"]["properties"]["llm"]["$ref"] == "#/components/schemas/LlmOptions"
+    body = spec["paths"]["/api/analyses"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    assert body == {"$ref": "#/components/schemas/DriveAnalysisRequest"}
+    assert "$defs" not in json.dumps(spec)
+    assert app.openapi() is app.openapi()  # cached, like FastAPI's default
 
 
 def test_cors_allows_frontend_origin(tmp_path):

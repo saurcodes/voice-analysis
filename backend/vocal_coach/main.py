@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic.json_schema import models_json_schema
 from sqlalchemy import Engine
 
 from vocal_coach.analysis.audio import check_ffmpeg
@@ -70,7 +71,26 @@ def create_app(
     for router in (me.router, config_public.router, llm.router, analyses.router, jobs.router, comparisons.router,
                    drive.router):
         app.include_router(router, prefix=API_PREFIX)
+    _register_extra_openapi_models(app)
     return app
+
+
+def _register_extra_openapi_models(app: FastAPI) -> None:
+    """Merge request models that routes parse by hand (so FastAPI never sees them) into
+    `components.schemas`, keeping the document free of inline `$defs`."""
+    default_openapi = app.openapi
+
+    def openapi() -> dict:
+        if app.openapi_schema is not None:
+            return app.openapi_schema
+        schema = default_openapi()
+        _, extra = models_json_schema([(model, "validation") for model in analyses.EXTRA_OPENAPI_MODELS],
+                                      ref_template="#/components/schemas/{model}")
+        schema.setdefault("components", {}).setdefault("schemas", {}).update(extra.get("$defs", {}))
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = openapi
 
 
 def _default_app() -> FastAPI:
