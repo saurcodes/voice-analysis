@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { ArrowSquareOut, Trash, WarningCircle } from "@phosphor-icons/react";
 import { ApiError } from "@/api/client";
-import { useDeleteAnalysis, useSummaries } from "@/api/hooks";
+import { useDeleteAnalysis, useSummariesInfinite } from "@/api/hooks";
 import type { components } from "@/api/types";
 import { formatDateTime, relativeTime } from "@/lib/dates";
 import { Badge } from "@/components/ui/badge";
@@ -22,8 +22,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { EmptyLibrary } from "./EmptyLibrary";
 
 type AnalysisSummary = components["schemas"]["AnalysisSummary"];
-
-const PAGE_SIZE = 50;
 
 const COLUMNS = [
   "Select",
@@ -70,15 +68,14 @@ export function AnalysesTable({
    * navigate with a dead id). */
   onDeleted?: (id: string) => void;
 }) {
-  const [limit, setLimit] = useState(PAGE_SIZE);
-  const summariesQuery = useSummaries({ limit, offset: 0 });
+  const summariesQuery = useSummariesInfinite();
   const [confirmTarget, setConfirmTarget] = useState<AnalysisSummary | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const deleteAnalysis = useDeleteAnalysis();
 
   const selected = new Set(selectedIds);
-  const rows = summariesQuery.data ?? [];
-  const hasMore = rows.length === limit;
+  const rows = summariesQuery.data?.pages.flat() ?? [];
+  const hasMore = summariesQuery.hasNextPage ?? false;
 
   function closeDialog() {
     setConfirmTarget(null);
@@ -220,8 +217,13 @@ export function AnalysesTable({
 
       {hasMore && (
         <div className="mt-4 flex justify-center">
-          <Button type="button" variant="outline" onClick={() => setLimit((prev) => prev + PAGE_SIZE)}>
-            Load more
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void summariesQuery.fetchNextPage()}
+            disabled={summariesQuery.isFetchingNextPage}
+          >
+            {summariesQuery.isFetchingNextPage ? "Loading..." : "Load more"}
           </Button>
         </div>
       )}

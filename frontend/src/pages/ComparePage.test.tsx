@@ -130,6 +130,28 @@ test("a 404 from the comparisons endpoint shows the not-found message", async ()
   expect(screen.getByRole("link", { name: "Back to Library" })).toHaveAttribute("href", "/");
 });
 
+test("prefers file_names from the comparison result, falling back to the summaries lookup for a null slot", async () => {
+  const data = comparison();
+  const withNames = { ...data, file_names: ["Opening pitch.wav", null] };
+  server.use(http.get("/api/comparisons", () => HttpResponse.json(withNames)));
+  server.use(
+    http.get("/api/analyses", () =>
+      HttpResponse.json([
+        summary({ id: data.analysis_ids[0], file_name: "should-not-show.wav" }),
+        summary({ id: data.analysis_ids[1], file_name: "fallback-name.wav" }),
+      ]),
+    ),
+  );
+
+  renderPage(`/compare?ids=${data.analysis_ids.join(",")}`);
+
+  await waitFor(() => expect(screen.getByText("Compare recordings")).toBeInTheDocument());
+
+  const items = within(screen.getByRole("list")).getAllByRole("listitem");
+  expect(items[0]).toHaveTextContent("Opening pitch.wav");
+  expect(items[1]).toHaveTextContent("fallback-name.wav");
+});
+
 test("header lists recordings with a colour swatch and formatted date, in request order", async () => {
   const data = comparison();
   server.use(http.get("/api/analyses", () => HttpResponse.json([summary(), summary({ id: data.analysis_ids[1] })])));

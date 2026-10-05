@@ -17,7 +17,11 @@ type TranscriptWord = components["schemas"]["TranscriptWord"];
 type TranscriptSegment = components["schemas"]["TranscriptSegment"];
 type DriveFileOut = components["schemas"]["DriveFileOut"];
 
-export function driveFile(overrides: Partial<DriveFileOut> = {}): DriveFileOut {
+/** DriveFileOut plus the `is_folder` flag the backend's Drive listing hardening adds; replace
+ * with the generated type once `npm run gen:api` picks up the updated openapi.json. */
+export type DriveFileWithFolder = DriveFileOut & { is_folder?: boolean };
+
+export function driveFile(overrides: Partial<DriveFileWithFolder> = {}): DriveFileWithFolder {
   return {
     id: "drive-file-0001",
     name: "pitch-practice.m4a",

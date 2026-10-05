@@ -225,6 +225,61 @@ test("a failed job row shows Retry, which POSTs a retry and switches the row ont
   await waitFor(() => expect(screen.getAllByText("noisy-call.wav")).toHaveLength(1));
 });
 
+test("the library paginates in pages of 50 via Load more, hiding it once the pages are exhausted", async () => {
+  const page1 = Array.from({ length: 50 }, (_, i) => summary({ id: `p1-${i}`, file_name: `rec-${i}.wav` }));
+  const page2 = [summary({ id: "p2-0", file_name: "last-one.wav" })];
+  server.use(
+    http.get("/api/analyses", ({ request }) => {
+      const offset = Number(new URL(request.url).searchParams.get("offset") ?? "0");
+      return HttpResponse.json(offset === 0 ? page1 : page2);
+    }),
+  );
+  server.use(http.get("/api/jobs", () => HttpResponse.json([])));
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+
+  await screen.findByText("rec-0.wav");
+  expect(screen.queryByText("last-one.wav")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("checkbox", { name: "Select rec-0.wav" }));
+  await user.click(screen.getByRole("button", { name: "Load more" }));
+
+  await screen.findByText("last-one.wav");
+  expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+  // The earlier selection survives the extra page loading in.
+  expect(screen.getByRole("checkbox", { name: "Select rec-0.wav" })).toBeChecked();
+});
+
+test("dismissing a failed job calls DELETE and removes the row", async () => {
+  const failedJob = jobStatus({
+    id: "job-dismiss-1",
+    status: "failed",
+    error: "decoder crashed",
+    file_name: "bad-take.wav",
+  });
+  let jobs = [failedJob];
+  server.use(http.get("/api/analyses", () => HttpResponse.json([])));
+  server.use(http.get("/api/jobs", () => HttpResponse.json(jobs)));
+  let deletedId: string | undefined;
+  server.use(
+    http.delete("/api/jobs/:id", ({ params }) => {
+      deletedId = params.id as string;
+      jobs = jobs.filter((job) => job.id !== params.id);
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+
+  expect(await screen.findByText("decoder crashed")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Dismiss" }));
+
+  await waitFor(() => expect(deletedId).toBe("job-dismiss-1"));
+  await waitFor(() => expect(screen.queryByText("decoder crashed")).not.toBeInTheDocument());
+});
+
 test("a retry the server refuses (410) shows its detail inline", async () => {
   const failedJob = jobStatus({
     id: "job-failed-2",

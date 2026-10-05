@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Warning, WarningCircle } from "@phosphor-icons/react";
+import { useIsMutating } from "@tanstack/react-query";
+import { CircleNotch, Warning, WarningCircle } from "@phosphor-icons/react";
 import { ApiError } from "@/api/client";
 import { useCoachAnalysis, useLlmModels, useMe } from "@/api/hooks";
 import { Button } from "@/components/ui/button";
@@ -68,7 +69,7 @@ function RerunCoachingDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const llmModelsQuery = useLlmModels({ enabled: open });
-  const coachMutation = useCoachAnalysis();
+  const coachMutation = useCoachAnalysis(analysisId);
   // CoachingPanel remounts this component (via `key`) every time the dialog opens, so a
   // lazy initial value here is all "prefilled on open" needs: no effect required to reset it
   // on reopen.
@@ -98,11 +99,8 @@ function RerunCoachingDialog({
     const trimmed = draftContext.trim();
     coachMutation.mutate(
       {
-        id: analysisId,
-        body: {
-          speaker_context: trimmed.length > 0 ? trimmed : null,
-          model: selectedModel || null,
-        },
+        speaker_context: trimmed.length > 0 ? trimmed : null,
+        model: selectedModel || null,
       },
       { onSuccess: () => onOpenChange(false) },
     );
@@ -191,6 +189,10 @@ export function CoachingPanel({
   // its draft speaker context, model pick and error state all start clean on each open with
   // plain lazy useState, no effect needed to reset them.
   const [dialogSession, setDialogSession] = useState(0);
+  // Tracks the mutation by its mutationKey rather than reading the dialog's own isPending, so
+  // the "running" state (and the disabled Re-run button) holds even if the dialog that started
+  // it has since closed, or this panel instance isn't the one that opened it.
+  const coachingRunning = useIsMutating({ mutationKey: ["vc", "coach", analysisId] }) > 0;
 
   // Stays disabled while /api/me is still loading, not just when it has resolved to false:
   // the button only ever enables once the server has confirmed coaching is on.
@@ -205,11 +207,18 @@ export function CoachingPanel({
 
   const rerunControls = (
     <div className="flex flex-col items-start gap-1">
-      <Button type="button" variant="outline" disabled={!llmEnabled} onClick={openDialog}>
+      <Button type="button" variant="outline" disabled={!llmEnabled || coachingRunning} onClick={openDialog}>
         Re-run coaching
       </Button>
-      {llmKnownDisabled && (
-        <p className="text-sm text-muted-foreground">Coaching is not enabled on this server yet</p>
+      {coachingRunning ? (
+        <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <CircleNotch weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+          Coaching is running
+        </span>
+      ) : (
+        llmKnownDisabled && (
+          <p className="text-sm text-muted-foreground">Coaching is not enabled on this server yet</p>
+        )
       )}
       <RerunCoachingDialog
         key={dialogSession}

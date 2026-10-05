@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useJobs } from "@/api/hooks";
+import { useDismissJob, useJobs } from "@/api/hooks";
 import { JobProgressList, type JobProgressItem } from "./JobProgressList";
 
 const VISIBLE_STATUSES = new Set(["queued", "running", "failed"]);
@@ -20,12 +20,21 @@ const VISIBLE_STATUSES = new Set(["queued", "running", "failed"]);
 export function JobsPanel({ excludeIds = [] }: { excludeIds?: string[] }) {
   const jobsQuery = useJobs();
   const queryClient = useQueryClient();
+  const dismissJob = useDismissJob();
   const [retried, setRetried] = useState<Record<string, string>>({});
+  // Dismissed ids are removed from view immediately (optimistic), ahead of the DELETE
+  // resolving: a dropped row never has to wait on a round-trip to disappear, and a 404 (the
+  // most likely failure, e.g. a double-click) is treated as success anyway.
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
   const excluded = new Set(excludeIds);
   const retryTargets = new Set(Object.values(retried));
   const jobs = (jobsQuery.data ?? []).filter(
-    (job) => VISIBLE_STATUSES.has(job.status) && !excluded.has(job.id) && !retryTargets.has(job.id),
+    (job) =>
+      VISIBLE_STATUSES.has(job.status) &&
+      !excluded.has(job.id) &&
+      !retryTargets.has(job.id) &&
+      !dismissed.has(job.id),
   );
 
   if (jobs.length === 0) return null;
@@ -45,13 +54,18 @@ export function JobsPanel({ excludeIds = [] }: { excludeIds?: string[] }) {
     void queryClient.invalidateQueries({ queryKey: ["vc", "jobs"] });
   }
 
+  function handleDismiss(jobId: string) {
+    setDismissed((prev) => new Set(prev).add(jobId));
+    dismissJob.mutate(jobId);
+  }
+
   return (
     <section aria-labelledby="jobs-panel-heading" className="mb-6 rounded-lg border border-border bg-card p-4">
       <h2 id="jobs-panel-heading" className="text-sm font-medium text-muted-foreground">
         Processing
       </h2>
       <div className="mt-3">
-        <JobProgressList jobs={items} onRetried={handleRetried} />
+        <JobProgressList jobs={items} onRetried={handleRetried} onDismiss={handleDismiss} />
       </div>
     </section>
   );

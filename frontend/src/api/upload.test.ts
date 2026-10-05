@@ -23,9 +23,11 @@ class FakeXMLHttpRequest {
   statusText = "";
   responseText = "";
   sentBody: FormData | null = null;
+  aborted = false;
   upload: { onprogress: ((event: FakeProgressEvent) => void) | null } = { onprogress: null };
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
+  onabort: (() => void) | null = null;
 
   open(method: string, url: string) {
     this.method = method;
@@ -39,6 +41,11 @@ class FakeXMLHttpRequest {
   send(body: FormData) {
     this.sentBody = body;
     FakeXMLHttpRequest.instances.push(this);
+  }
+
+  abort() {
+    this.aborted = true;
+    this.onabort?.();
   }
 }
 
@@ -123,4 +130,29 @@ test("maps a 413 {detail} response to ApiError", async () => {
 
   await expect(promise).rejects.toBeInstanceOf(ApiError);
   await expect(promise).rejects.toMatchObject({ status: 413, detail: "file too large" });
+});
+
+test("aborting the signal aborts the underlying XHR and rejects with a cancelled ApiError", async () => {
+  const file = new File(["hello"], "clip.wav", { lastModified: 1_700_000_000_000 });
+  const controller = new AbortController();
+
+  const promise = uploadAnalysis(file, {}, { getToken: async () => "tok", signal: controller.signal });
+  const xhr = await currentXhr();
+
+  controller.abort();
+
+  expect(xhr.aborted).toBe(true);
+  await expect(promise).rejects.toBeInstanceOf(ApiError);
+  await expect(promise).rejects.toMatchObject({ status: 0, detail: "upload cancelled" });
+});
+
+test("a signal already aborted before the call rejects immediately without opening an XHR", async () => {
+  const file = new File(["hello"], "clip.wav", { lastModified: 1_700_000_000_000 });
+  const controller = new AbortController();
+  controller.abort();
+
+  const promise = uploadAnalysis(file, {}, { getToken: async () => "tok", signal: controller.signal });
+
+  await expect(promise).rejects.toMatchObject({ status: 0, detail: "upload cancelled" });
+  expect(FakeXMLHttpRequest.instances).toHaveLength(0);
 });

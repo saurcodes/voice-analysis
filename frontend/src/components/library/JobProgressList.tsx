@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { CheckCircle, WarningCircle } from "@phosphor-icons/react";
+import { CheckCircle, WarningCircle, X } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 import { useAuthState } from "@/auth/context";
 import { ApiError, authFetch } from "@/api/client";
@@ -24,6 +24,9 @@ export interface JobProgressItem {
   jobId?: string;
   uploadPct?: number;
   error?: string;
+  /** Set by the owner (AnalyseDrawer) once it has aborted this row's upload; renders a muted
+   * "Cancelled" state instead of the progress bar, and the row is never watched. */
+  cancelled?: boolean;
 }
 
 interface LiveStatus {
@@ -68,9 +71,19 @@ function errorDetail(error: unknown): string {
 export function JobProgressList({
   jobs,
   onRetried,
+  onCancel,
+  onDismiss,
 }: {
   jobs: JobProgressItem[];
   onRetried?: (oldJobId: string, newJobId: string) => void;
+  /** Called with a row's key when its Cancel button is clicked (shown only while that row is
+   * actively uploading). The owner holds the AbortController and marks the row cancelled. */
+  onCancel?: (key: string) => void;
+  /** Called with a row's current job id when its Dismiss button is clicked (shown on done and
+   * failed rows once a job id exists). JobsPanel wires this to useDismissJob(); AnalyseDrawer
+   * does not pass it, since its rows are an in-session upload batch rather than the server's
+   * persisted jobs list. */
+  onDismiss?: (jobId: string) => void;
 }) {
   const { getToken } = useAuthState();
   const api = useApi();
@@ -94,6 +107,8 @@ export function JobProgressList({
           getJob={getJob}
           queryClient={queryClient}
           onRetried={onRetried}
+          onCancel={onCancel ? () => onCancel(job.key) : undefined}
+          onDismiss={onDismiss}
         />
       ))}
     </ul>
@@ -106,12 +121,16 @@ function JobProgressRow({
   getJob,
   queryClient,
   onRetried,
+  onCancel,
+  onDismiss,
 }: {
   job: JobProgressItem;
   authFetch: AuthFetch;
   getJob: GetJob;
   queryClient: QueryClient;
   onRetried?: (oldJobId: string, newJobId: string) => void;
+  onCancel?: () => void;
+  onDismiss?: (jobId: string) => void;
 }) {
   const [live, setLive] = useState<LiveStatus>({});
   const [retriedJobId, setRetriedJobId] = useState<string | undefined>();
@@ -122,7 +141,8 @@ function JobProgressRow({
   const jobId = retriedJobId ?? job.jobId;
   // A retry replaces whatever failure the caller seeded: the new job starts clean.
   const seededError = retriedJobId ? undefined : job.error;
-  const watchId = seededError ? undefined : jobId;
+  const isCancelled = Boolean(job.cancelled);
+  const watchId = seededError || isCancelled ? undefined : jobId;
 
   // The watcher reads its collaborators through a ref so it only restarts when the job id
   // changes, not every time auth state or the route hands down new function identities.
@@ -168,19 +188,25 @@ function JobProgressRow({
   const error = live.error ?? seededError;
   const isDone = live.status === "done";
   const isFailed = live.status === "failed" || (!live.status && Boolean(seededError));
-  const isWaiting = !jobId && !seededError && job.uploadPct === undefined;
-  const isUploading = !jobId && !seededError && job.uploadPct !== undefined;
+  const isWaiting = !jobId && !seededError && !isCancelled && job.uploadPct === undefined;
+  const isUploading = !jobId && !seededError && !isCancelled && job.uploadPct !== undefined;
   const progressPct = isDone ? 100 : (live.progressPct ?? job.uploadPct ?? 0);
 
-  const label = isDone
-    ? stageLabel("done")
-    : isFailed
-      ? "Failed"
-      : isWaiting
-        ? "Waiting"
-        : isUploading
-          ? "Uploading"
-          : stageLabel(live.stage);
+  const label = isCancelled
+    ? "Cancelled"
+    : isDone
+      ? stageLabel("done")
+      : isFailed
+        ? "Failed"
+        : isWaiting
+          ? "Waiting"
+          : isUploading
+            ? "Uploading"
+            : stageLabel(live.stage);
+
+  function handleDismiss() {
+    if (jobId) onDismiss?.(jobId);
+  }
 
   return (
     <li className="rounded-lg border border-border bg-card p-3">
@@ -191,15 +217,25 @@ function JobProgressRow({
             <CheckCircle weight="regular" className="size-4" />
             Done
           </span>
+        ) : isCancelled ? (
+          <span className="flex items-center gap-1 text-sm text-muted-foreground">
+            <X weight="regular" className="size-4" />
+            Cancelled
+          </span>
         ) : (
           <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
             <span>{label}</span>
             {!isFailed && !isWaiting && <span className="num">{Math.round(progressPct)}%</span>}
+            {isUploading && onCancel && (
+              <Button type="button" variant="ghost" size="xs" onClick={onCancel}>
+                Cancel
+              </Button>
+            )}
           </span>
         )}
       </div>
 
-      {!isFailed && (
+      {!isFailed && !isCancelled && (
         <div
           role="progressbar"
           aria-valuenow={Math.round(progressPct)}
@@ -216,13 +252,25 @@ function JobProgressRow({
         </div>
       )}
 
-      {isDone && live.analysisId && (
-        <Link
-          to={`/analyses/${live.analysisId}`}
-          className="mt-2 inline-block text-sm font-medium text-primary hover:underline"
-        >
-          Open analysis
-        </Link>
+      {isDone && (live.analysisId || (onDismiss && jobId)) && (
+        <div className="mt-2 flex items-center justify-between gap-3">
+          {live.analysisId ? (
+            <Link
+              to={`/analyses/${live.analysisId}`}
+              className="text-sm font-medium text-primary hover:underline"
+            >
+              Open analysis
+            </Link>
+          ) : (
+            <span />
+          )}
+          {onDismiss && jobId && (
+            <Button type="button" variant="ghost" size="sm" onClick={handleDismiss}>
+              <X weight="regular" className="size-4" />
+              Dismiss
+            </Button>
+          )}
+        </div>
       )}
 
       {isFailed && (
@@ -232,17 +280,25 @@ function JobProgressRow({
               <WarningCircle weight="regular" className="size-4 shrink-0" />
               {error ?? "Job failed"}
             </span>
-            {jobId && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleRetry}
-                disabled={retryJob.isPending}
-              >
-                Retry
-              </Button>
-            )}
+            <div className="flex items-center gap-1">
+              {jobId && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRetry}
+                  disabled={retryJob.isPending}
+                >
+                  Retry
+                </Button>
+              )}
+              {onDismiss && jobId && (
+                <Button type="button" variant="ghost" size="sm" onClick={handleDismiss}>
+                  <X weight="regular" className="size-4" />
+                  Dismiss
+                </Button>
+              )}
+            </div>
           </div>
           {retryError && (
             <p role="alert" className="flex items-center gap-1.5 text-sm text-serious">

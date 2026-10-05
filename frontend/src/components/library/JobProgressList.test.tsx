@@ -1,4 +1,5 @@
 import { act, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient } from "@tanstack/react-query";
 import { renderWithProviders } from "@/test/render";
 import { JobProgressList, type JobProgressItem } from "./JobProgressList";
@@ -139,6 +140,51 @@ test("a terminal status refreshes the library and jobs queries", () => {
   expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vc", "summaries"] });
   expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vc", "jobs"] });
   invalidateSpy.mockRestore();
+});
+
+test("an uploading row shows a Cancel button that reports its key", async () => {
+  const onCancel = vi.fn();
+  const jobs: JobProgressItem[] = [{ key: "job-11", fileName: "take-eleven.wav", uploadPct: 30 }];
+  renderWithProviders(<JobProgressList jobs={jobs} onCancel={onCancel} />);
+
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(onCancel).toHaveBeenCalledWith("job-11");
+});
+
+test("a cancelled row shows a muted Cancelled label, hides the progress bar, and is not watched", () => {
+  mockWatchJob();
+  const jobs: JobProgressItem[] = [
+    { key: "job-12", fileName: "take-twelve.wav", uploadPct: 30, cancelled: true },
+  ];
+  renderWithProviders(<JobProgressList jobs={jobs} />);
+
+  expect(screen.getByText("Cancelled")).toBeInTheDocument();
+  expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+  expect(watchJobMock).not.toHaveBeenCalled();
+});
+
+test("a done row shows a Dismiss button that reports the job id", async () => {
+  const { emit } = mockWatchJob();
+  const onDismiss = vi.fn();
+  const jobs: JobProgressItem[] = [{ key: "job-13", fileName: "take-thirteen.wav", jobId: "job-13" }];
+  renderWithProviders(<JobProgressList jobs={jobs} onDismiss={onDismiss} />);
+
+  emit({ status: "done", analysis_id: "a-13" });
+  await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  expect(onDismiss).toHaveBeenCalledWith("job-13");
+});
+
+test("a failed row shows Retry and Dismiss side by side when onDismiss is provided", async () => {
+  const { emit } = mockWatchJob();
+  const onDismiss = vi.fn();
+  const jobs: JobProgressItem[] = [{ key: "job-14", fileName: "take-fourteen.wav", jobId: "job-14" }];
+  renderWithProviders(<JobProgressList jobs={jobs} onDismiss={onDismiss} />);
+
+  emit({ status: "failed", error: "decoder crashed" });
+  expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  expect(onDismiss).toHaveBeenCalledWith("job-14");
 });
 
 test("with the real watchJob over CRLF frames: Extracting audio, still Extracting audio after progress, then Done", async () => {

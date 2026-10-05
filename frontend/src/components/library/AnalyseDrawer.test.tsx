@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { renderWithProviders } from "@/test/render";
@@ -278,6 +278,60 @@ test("reports each job as it is created, blocks closing mid-batch, then clears t
   expect(screen.queryByText("Uploads in progress")).not.toBeInTheDocument();
   expect(screen.getByRole("progressbar", { name: /first\.wav/ })).toBeInTheDocument();
   expect(screen.getByRole("progressbar", { name: /second\.wav/ })).toBeInTheDocument();
+});
+
+test("cancelling an in-flight upload aborts it, marks that row Cancelled, and the other file still completes", async () => {
+  let releaseFirst: (() => void) | undefined;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let firstSignal: AbortSignal | undefined;
+  let callCount = 0;
+  uploadAnalysisMock.mockImplementation(async (_file, _fields, options) => {
+    callCount += 1;
+    if (callCount === 1) {
+      firstSignal = options.signal;
+      await firstGate;
+      if (options.signal?.aborted) throw new ApiError(0, "upload cancelled");
+      return { job_ids: ["job-a"] };
+    }
+    return { job_ids: ["job-b"] };
+  });
+
+  const user = userEvent.setup();
+  renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
+
+  const dropzone = screen.getByRole("button", { name: /drag and drop recordings/i });
+  fireEvent.drop(dropzone, {
+    dataTransfer: { files: [makeFile("first.wav"), makeFile("second.wav")] },
+  });
+  await user.click(screen.getByRole("button", { name: "Analyse 2 files" }));
+
+  // UploadDropzone's file chips are also <li> elements with the same text, so a progress row
+  // is identified by its own "rounded-lg" class rather than just being an <li>.
+  function progressRow(fileName: string): HTMLElement {
+    const row = screen
+      .getAllByText(fileName)
+      .map((el) => el.closest("li"))
+      .find((el): el is HTMLLIElement => el !== null && el.className.includes("rounded-lg"));
+    if (!row) throw new Error(`no progress row found for ${fileName}`);
+    return row;
+  }
+
+  await waitFor(() =>
+    expect(within(progressRow("first.wav")).getByRole("button", { name: "Cancel" })).toBeInTheDocument(),
+  );
+  await user.click(within(progressRow("first.wav")).getByRole("button", { name: "Cancel" }));
+
+  expect(firstSignal?.aborted).toBe(true);
+  releaseFirst?.();
+
+  await waitFor(() => expect(within(progressRow("first.wav")).getByText("Cancelled")).toBeInTheDocument());
+  expect(within(progressRow("first.wav")).queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+  // The second file was not aborted and still reaches done.
+  expect(
+    await within(progressRow("second.wav")).findByRole("link", { name: "Open analysis" }),
+  ).toBeInTheDocument();
 });
 
 test("the submit button is disabled until a file is added", () => {
