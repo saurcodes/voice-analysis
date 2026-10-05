@@ -287,11 +287,12 @@ Google, stored as its own connection row.
 - `DRIVE_TOKEN_KEY`: a Fernet key that encrypts stored Drive refresh tokens. Generate with:
   `backend/.venv/bin/python -c "from vocal_coach.drive.crypto import generate_key; print(generate_key())"`.
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`: from the OAuth client created above.
-- `GOOGLE_REDIRECT_URI`: must match the Google Cloud Console entry exactly. Under
-  `docker compose` it defaults to `http://localhost:3000/api/drive/callback`, so the browser's OAuth
-  round trip stays on the frontend origin and passes through the nginx `/api` proxy; a bare
-  `uvicorn --reload` dev loop against the backend directly defaults to
-  `http://localhost:8000/api/drive/callback` instead. See `.env.example`.
+- `GOOGLE_REDIRECT_URI`: must match the Google Cloud Console entry exactly. Leave it commented out
+  in `.env.example`/`.env` to keep each mode's own default: `http://localhost:3000/api/drive/callback`
+  under `docker compose` (the nginx `/api` proxy keeps the browser round trip on the frontend
+  origin), or `http://localhost:8000/api/drive/callback` for a bare `uvicorn --reload` dev loop
+  against the backend directly. Uncomment and set it only when your redirect URI differs. See
+  `.env.example`.
 
 `/me.drive_configured` is `false` until `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and
 `DRIVE_TOKEN_KEY` are all set.
