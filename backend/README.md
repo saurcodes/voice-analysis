@@ -310,7 +310,9 @@ connection. The OAuth `state` parameter is signed with `SECRET_KEY` and binds th
 HttpOnly cookie `vc_drive_oauth` (path `/api/drive/callback`, `SameSite=Lax`, `Secure` when
 `FRONTEND_ORIGIN` is https, 10 minutes) holding the state's nonce; the callback requires the cookie
 to match, which ties the flow to the browser that started it, and clears it on every outcome. Each
-state is single-use: a second callback with the same state is a 400. The frontend's connect request
+state is single-use: a second callback with the same state is a 400. The used-state ledger lives in
+the backend process's memory, so it relies on the same one-backend-process rule as the job sweep
+above; a second process would not see states consumed by the first. The frontend's connect request
 therefore sends credentials. Only the refresh token is stored, and only
 Fernet-encrypted with `DRIVE_TOKEN_KEY`; an access token is fetched from Google per request and is
 never stored, logged or returned by any endpoint. Disconnecting revokes the token at Google and
