@@ -71,6 +71,28 @@ test("browsing into a missing folder shows Folder not found", async () => {
   expect(await screen.findByText("Folder not found")).toBeInTheDocument();
 });
 
+test("shows a running selection count next to the folder input", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<Harness />);
+
+  expect(await screen.findByText("pitch-practice.m4a")).toBeInTheDocument();
+  expect(screen.queryByText("selected")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("checkbox", { name: "Select pitch-practice.m4a" }));
+  expect(screen.getByText("selected", { exact: false })).toHaveTextContent("1 selected");
+
+  await user.click(screen.getByRole("checkbox", { name: "Select cold-open.wav" }));
+  expect(screen.getByText("selected", { exact: false })).toHaveTextContent("2 selected");
+});
+
+test("a null size renders a dash without the numeric styling class", async () => {
+  server.use(http.get("/api/drive/files", () => HttpResponse.json([driveFile({ size: null })])));
+  renderWithProviders(<Harness />);
+
+  const dash = await screen.findByText("-");
+  expect(dash).not.toHaveClass("num");
+});
+
 test("a selection made in one folder survives browsing into another", async () => {
   const user = userEvent.setup();
   renderWithProviders(<Harness />);

@@ -145,6 +145,61 @@ test("submitting two Drive files posts the JSON body and renders two progress ro
   expect(screen.getAllByText("cold-open.wav").length).toBeGreaterThan(0);
 });
 
+test("disables the tab triggers while a Drive submission is in flight", async () => {
+  server.use(...driveConfiguredHandlers());
+  server.use(
+    http.get("/api/drive/files", () => HttpResponse.json([driveFile({ id: "drive-1", name: "pitch.wav" })])),
+  );
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.post("/api/analyses", async () => {
+      await gate;
+      return HttpResponse.json({ job_ids: ["job-drive-1"] }, { status: 202 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
+
+  await waitFor(() => expect(screen.getByRole("tab", { name: "Google Drive" })).toBeEnabled());
+  await user.click(screen.getByRole("tab", { name: "Google Drive" }));
+  await user.click(await screen.findByRole("checkbox", { name: "Select pitch.wav" }));
+  await user.click(screen.getByRole("button", { name: "Analyse 1 file" }));
+
+  expect(screen.getByRole("tab", { name: "Upload" })).toBeDisabled();
+  expect(screen.getByRole("tab", { name: "Google Drive" })).toBeDisabled();
+
+  release?.();
+
+  await waitFor(() => expect(screen.getByRole("tab", { name: "Upload" })).toBeEnabled());
+  expect(screen.getByRole("tab", { name: "Google Drive" })).toBeEnabled();
+});
+
+test("a 415 from the Drive submit shows the server detail inline", async () => {
+  server.use(...driveConfiguredHandlers());
+  server.use(
+    http.get("/api/drive/files", () => HttpResponse.json([driveFile({ id: "drive-1", name: "pitch.wav" })])),
+  );
+  server.use(
+    http.post("/api/analyses", () =>
+      HttpResponse.json({ detail: "unsupported file type: pitch.wav" }, { status: 415 }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
+
+  await waitFor(() => expect(screen.getByRole("tab", { name: "Google Drive" })).toBeEnabled());
+  await user.click(screen.getByRole("tab", { name: "Google Drive" }));
+  await user.click(await screen.findByRole("checkbox", { name: "Select pitch.wav" }));
+  await user.click(screen.getByRole("button", { name: "Analyse 1 file" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("unsupported file type: pitch.wav");
+});
+
 test("a 409 from the Drive submit shows a Connect-Google-Drive note inline", async () => {
   server.use(...driveConfiguredHandlers());
   server.use(

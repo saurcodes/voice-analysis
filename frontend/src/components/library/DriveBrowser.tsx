@@ -31,6 +31,21 @@ export interface DriveBrowserProps {
   enabled?: boolean;
 }
 
+/** Shared header row for both the loading-skeleton table and the real results table. */
+function DriveTableHeader() {
+  return (
+    <TableHeader>
+      <TableRow>
+        {COLUMNS.map((column) => (
+          <TableHead key={column} className={column === "Select" ? "w-8" : undefined}>
+            {column === "Select" ? <span className="sr-only">Select</span> : column}
+          </TableHead>
+        ))}
+      </TableRow>
+    </TableHeader>
+  );
+}
+
 /**
  * Lists the signed-in user's Drive files in a folder (root by default) for multi-select in
  * the Analyse drawer. Selection is fully controlled: this component never holds its own copy
@@ -75,6 +90,11 @@ export function DriveBrowser({ selected, onChange, enabled = true }: DriveBrowse
             placeholder="root"
           />
         </div>
+        {selected.length > 0 && (
+          <p className="pb-2 text-sm whitespace-nowrap text-muted-foreground">
+            <span className="num">{selected.length}</span> selected
+          </p>
+        )}
         <Button type="button" variant="outline" onClick={browse}>
           <FolderOpen weight="regular" className="size-4" />
           Browse
@@ -83,13 +103,7 @@ export function DriveBrowser({ selected, onChange, enabled = true }: DriveBrowse
 
       {filesQuery.isLoading ? (
         <Table>
-          <TableHeader>
-            <TableRow>
-              {COLUMNS.map((column) => (
-                <TableHead key={column}>{column === "Select" ? <span className="sr-only">Select</span> : column}</TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
+          <DriveTableHeader />
           <TableBody>
             {Array.from({ length: 3 }, (_, i) => (
               <TableRow key={i}>
@@ -110,15 +124,7 @@ export function DriveBrowser({ selected, onChange, enabled = true }: DriveBrowse
         </p>
       ) : (
         <Table>
-          <TableHeader>
-            <TableRow>
-              {COLUMNS.map((column) => (
-                <TableHead key={column} className={column === "Select" ? "w-8" : undefined}>
-                  {column === "Select" ? <span className="sr-only">Select</span> : column}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
+          <DriveTableHeader />
           <TableBody>
             {files.map((file) => (
               <TableRow key={file.id} data-state={selectedIds.has(file.id) ? "selected" : undefined}>
@@ -132,7 +138,11 @@ export function DriveBrowser({ selected, onChange, enabled = true }: DriveBrowse
                 <TableCell className="max-w-48 truncate font-medium">{file.name}</TableCell>
                 <TableCell>{formatDateTime(file.modified_time)}</TableCell>
                 <TableCell>
-                  <span className="num text-muted-foreground">{formatSize(file.size)}</span>
+                  {file.size === null ? (
+                    <span className="text-muted-foreground">{formatSize(file.size)}</span>
+                  ) : (
+                    <span className="num text-muted-foreground">{formatSize(file.size)}</span>
+                  )}
                 </TableCell>
               </TableRow>
             ))}

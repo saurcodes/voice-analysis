@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useLocation } from "react-router";
 import {
   keepPreviousData,
@@ -23,14 +23,7 @@ type JobIds = components["schemas"]["JobIds"];
 type ComparisonResult = components["schemas"]["ComparisonResult"];
 type ConnectUrl = components["schemas"]["ConnectUrl"];
 type DriveFileOut = components["schemas"]["DriveFileOut"];
-
-/** Mirrors backend DriveAnalysisRequest; replace with the generated type once exported. */
-export interface DriveAnalysisRequest {
-  source: "drive";
-  file_ids: string[];
-  speaker_context: string | null;
-  llm: { enabled: boolean; model: string | null };
-}
+export type DriveAnalysisRequest = components["schemas"]["DriveAnalysisRequest"];
 
 const ACTIVE_JOB_STATUSES: ReadonlySet<JobStatus["status"]> = new Set(["queued", "running"]);
 const JOBS_REFETCH_MS = 5000;
@@ -198,26 +191,42 @@ export function useRetryJob() {
 
 const ME_KEY: QueryKey = ["vc", "me"];
 
+const DRIVE_KEY: QueryKey = ["vc", "drive"];
+
 /** Starts the Drive OAuth flow: fetches the Google consent URL, then navigates the whole
  * page there. The navigation lives in onSuccess (rather than the caller) so it's exercised
- * by the same mutation every caller uses, and is spy-able in tests via window.location.assign. */
+ * by the same mutation every caller uses, and is spy-able in tests via window.location.assign.
+ * Sent with credentials so the HttpOnly `vc_drive_oauth` state cookie the server sets on this
+ * response round-trips back on the callback request (same-origin fetch already carries
+ * cookies under the nginx proxy; this call makes that explicit rather than relying on it). */
 export function useDriveConnect() {
   const api = useApi();
   return useMutation({
-    mutationFn: () => api.get<ConnectUrl>("/api/drive/connect"),
+    mutationFn: () => api.get<ConnectUrl>("/api/drive/connect", { credentials: "include" }),
     onSuccess: ({ url }) => {
       window.location.assign(url);
     },
   });
 }
 
+/** Disconnecting when the connection is already gone (a 404, e.g. a second click or a stale
+ * tab) is treated as success rather than an error the user has to dismiss. Refreshes both
+ * /me (drive_connected flips to false) and any cached Drive file listings (so a re-connect
+ * doesn't show a stale folder from the previous account). */
 export function useDisconnectDrive() {
   const api = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api.del<void>("/api/drive/connect"),
+    mutationFn: async () => {
+      try {
+        await api.del<void>("/api/drive/connect");
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 404) throw error;
+      }
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ME_KEY });
+      void queryClient.invalidateQueries({ queryKey: DRIVE_KEY });
     },
   });
 }
@@ -225,10 +234,13 @@ export function useDisconnectDrive() {
 /** Lists Drive files in a folder (root when folderId is empty). A server answer (409 not
  * connected, 503 not configured, 404 folder not found) is final; only a network-level
  * failure is retried, once. Stays fresh for a minute: browsing back into the same folder
- * mid-session shouldn't re-hit Google every time. */
+ * mid-session shouldn't re-hit Google every time. A 409 (drive_not_connected, e.g. the user
+ * revoked access in their Google account since /me last loaded) also refreshes /me so the
+ * rest of the app flips to the disconnected state instead of just this one query. */
 export function useDriveFiles(folderId: string, { enabled = true }: { enabled?: boolean } = {}) {
   const api = useApi();
-  return useQuery({
+  const queryClient = useQueryClient();
+  const query = useQuery({
     queryKey: ["vc", "drive", "files", folderId] as const,
     queryFn: () =>
       api.get<DriveFileOut[]>(`/api/drive/files?folder_id=${encodeURIComponent(folderId)}`),
@@ -236,6 +248,14 @@ export function useDriveFiles(folderId: string, { enabled = true }: { enabled?: 
     staleTime: 60_000,
     retry: (failureCount, error) => !(error instanceof ApiError) && failureCount < 1,
   });
+
+  useEffect(() => {
+    if (query.error instanceof ApiError && query.error.status === 409) {
+      void queryClient.invalidateQueries({ queryKey: ME_KEY });
+    }
+  }, [query.error, queryClient]);
+
+  return query;
 }
 
 export function useCreateDriveAnalyses() {

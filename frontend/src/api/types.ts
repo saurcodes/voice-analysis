@@ -549,6 +549,22 @@ export interface components {
             /** Words Per Min */
             words_per_min: number;
         };
+        /** DriveAnalysisRequest */
+        DriveAnalysisRequest: {
+            /** File Ids */
+            file_ids: string[];
+            llm?: components["schemas"]["LlmOptions"];
+            /**
+             * Source
+             * @constant
+             */
+            source: "drive";
+            /**
+             * Speaker Context
+             * @default null
+             */
+            speaker_context: string | null;
+        };
         /** DriveFileOut */
         DriveFileOut: {
             /** Id */
@@ -667,6 +683,19 @@ export interface components {
             models: string[];
             /** Provider */
             provider: string | null;
+        };
+        /** LlmOptions */
+        LlmOptions: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
         };
         /** LowConfWord */
         LowConfWord: {
@@ -982,6 +1011,7 @@ export interface operations {
         };
         requestBody: {
             content: {
+                "application/json": components["schemas"]["DriveAnalysisRequest"];
                 "multipart/form-data": {
                     /** Format: binary */
                     file: string;
@@ -1003,6 +1033,20 @@ export interface operations {
                     "application/json": components["schemas"]["JobIds"];
                 };
             };
+            /** @description drive file not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description drive_not_connected */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description file too large */
             413: {
                 headers: {
@@ -1012,13 +1056,6 @@ export interface operations {
             };
             /** @description unsupported file type */
             415: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Drive source not available yet */
-            501: {
                 headers: {
                     [name: string]: unknown;
                 };

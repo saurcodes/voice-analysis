@@ -7,7 +7,7 @@ import { server } from "@/test/msw";
 import { MockAuthProvider } from "@/test/MockAuthProvider";
 import type { AuthState } from "@/auth/context";
 import { jobStatus, summary } from "@/test/fixtures";
-import { useApi, useJobs, useSummaries } from "./hooks";
+import { useApi, useDisconnectDrive, useDriveConnect, useDriveFiles, useJobs, useSummaries } from "./hooks";
 
 function buildAuth(overrides: Partial<AuthState> = {}): AuthState {
   return {
@@ -142,4 +142,69 @@ test("useJobs stops refetching once no job is queued or running", async () => {
 
   await vi.advanceTimersByTimeAsync(6000);
   expect(calls).toBe(1);
+});
+
+test("useDriveConnect sends credentials so the HttpOnly oauth state cookie round-trips", async () => {
+  let capturedCredentials: RequestCredentials | undefined;
+  server.use(
+    http.get("/api/drive/connect", ({ request }) => {
+      capturedCredentials = request.credentials;
+      return HttpResponse.json({ url: "https://accounts.google.com/o/oauth2/v2/auth?mock=1" });
+    }),
+  );
+  const originalLocation = window.location;
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    value: { ...originalLocation, assign: vi.fn() },
+  });
+
+  const { result } = renderHook(() => useDriveConnect(), { wrapper: createWrapper() });
+  result.current.mutate();
+
+  await waitFor(() => expect(capturedCredentials).toBe("include"));
+
+  Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
+});
+
+test("useDisconnectDrive treats a 404 as success and invalidates both the me and drive queries", async () => {
+  server.use(http.delete("/api/drive/connect", () => HttpResponse.json({ detail: "not found" }, { status: 404 })));
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <MockAuthProvider auth={buildAuth()} queryClient={queryClient}>
+        {children}
+      </MockAuthProvider>
+    );
+  }
+  queryClient.setQueryData(["vc", "me"], { drive_connected: true });
+  queryClient.setQueryData(["vc", "drive", "files", "root"], []);
+
+  const { result } = renderHook(() => useDisconnectDrive(), { wrapper: Wrapper });
+  result.current.mutate();
+
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  expect(queryClient.getQueryState(["vc", "me"])?.isInvalidated).toBe(true);
+  expect(queryClient.getQueryState(["vc", "drive", "files", "root"])?.isInvalidated).toBe(true);
+});
+
+test("useDriveFiles invalidates the me query on a 409 (drive no longer connected)", async () => {
+  server.use(
+    http.get("/api/drive/files", () => HttpResponse.json({ detail: "drive_not_connected" }, { status: 409 })),
+  );
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <MockAuthProvider auth={buildAuth()} queryClient={queryClient}>
+        {children}
+      </MockAuthProvider>
+    );
+  }
+  queryClient.setQueryData(["vc", "me"], { drive_connected: true });
+
+  const { result } = renderHook(() => useDriveFiles("root"), { wrapper: Wrapper });
+
+  await waitFor(() => expect(result.current.isError).toBe(true));
+  await waitFor(() => expect(queryClient.getQueryState(["vc", "me"])?.isInvalidated).toBe(true));
 });

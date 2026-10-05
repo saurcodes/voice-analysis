@@ -44,6 +44,70 @@ test("Connect Google Drive fetches the consent URL and navigates the page there"
   Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
 });
 
+test("a Connect failure (e.g. a 503 after a config change) shows an inline alert under the button", async () => {
+  server.use(...driveConfiguredHandlers());
+  server.use(
+    http.get("/api/drive/connect", () =>
+      HttpResponse.json({ detail: "drive is not configured on this server" }, { status: 503 }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<SettingsPage />);
+
+  await user.click(await screen.findByRole("button", { name: /connect google drive/i }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("drive is not configured on this server");
+});
+
+test("a drive=error redirect shows a could-not-connect message", () => {
+  renderWithProviders(<SettingsPage />, { route: "/settings?drive=error" });
+  expect(screen.getByText("Could not connect Google Drive. Try again.")).toBeInTheDocument();
+});
+
+test("the Connect button shows a skeleton instead of flashing while /me loads", async () => {
+  server.use(
+    http.get("/api/me", async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return HttpResponse.json({
+        id: "00000000-0000-0000-0000-000000000001",
+        email: "demo@example.com",
+        username: "Demo User",
+        drive_configured: true,
+        drive_connected: false,
+        google_email: null,
+        llm_enabled: false,
+        llm_provider: null,
+      });
+    }),
+  );
+  renderWithProviders(<SettingsPage />);
+
+  expect(screen.queryByRole("button", { name: /connect google drive/i })).not.toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: /connect google drive/i })).toBeInTheDocument();
+});
+
+test("when connected with no stored Google email, shows Connected without the word null", async () => {
+  server.use(
+    http.get("/api/me", () =>
+      HttpResponse.json({
+        id: "00000000-0000-0000-0000-000000000001",
+        email: "demo@example.com",
+        username: "Demo User",
+        drive_configured: true,
+        drive_connected: true,
+        google_email: null,
+        llm_enabled: false,
+        llm_provider: null,
+      }),
+    ),
+  );
+  renderWithProviders(<SettingsPage />);
+
+  expect(await screen.findByText("Connected")).toBeInTheDocument();
+  expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
+});
+
 test("when connected, shows the linked email and disconnects after confirming", async () => {
   server.use(...driveConnectedHandlers("coach@gmail.com"));
 
@@ -83,6 +147,77 @@ test("when connected, shows the linked email and disconnects after confirming", 
   await waitFor(() =>
     expect(screen.getByRole("button", { name: /connect google drive/i })).toBeInTheDocument(),
   );
+});
+
+test("Cancel is disabled while a disconnect is in flight, and a 404 is treated as success", async () => {
+  let connected = true;
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get("/api/me", () =>
+      HttpResponse.json({
+        id: "00000000-0000-0000-0000-000000000001",
+        email: "demo@example.com",
+        username: "Demo User",
+        drive_configured: true,
+        drive_connected: connected,
+        google_email: connected ? "coach@gmail.com" : null,
+        llm_enabled: false,
+        llm_provider: null,
+      }),
+    ),
+    http.delete("/api/drive/connect", async () => {
+      await gate;
+      connected = false;
+      return HttpResponse.json({ detail: "not found" }, { status: 404 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<SettingsPage />);
+
+  await screen.findByText("Connected as coach@gmail.com");
+  await user.click(screen.getByRole("button", { name: "Disconnect" }));
+  const dialog = screen.getByRole("dialog");
+
+  await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+
+  expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+
+  release?.();
+
+  // A 404 (connection already gone) is treated as success: the dialog closes and the Connect
+  // button (not an error) comes back.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /connect google drive/i })).toBeInTheDocument(),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+test("a disconnect error clears when the dialog is reopened", async () => {
+  server.use(...driveConnectedHandlers("coach@gmail.com"));
+  server.use(
+    http.delete("/api/drive/connect", () => HttpResponse.json({ detail: "server error" }, { status: 500 })),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<SettingsPage />);
+
+  await screen.findByText("Connected as coach@gmail.com");
+  await user.click(screen.getByRole("button", { name: "Disconnect" }));
+  const dialog = screen.getByRole("dialog");
+  await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("server error");
+
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+  await user.click(screen.getByRole("button", { name: "Disconnect" }));
+  const reopenedDialog = screen.getByRole("dialog");
+  expect(within(reopenedDialog).queryByRole("alert")).not.toBeInTheDocument();
 });
 
 test("a drive=connected redirect shows a success note", () => {

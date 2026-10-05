@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 
 function errorDetail(error: unknown): string {
   if (error instanceof ApiError) {
@@ -22,12 +23,20 @@ function errorDetail(error: unknown): string {
   return "Something went wrong. Try again.";
 }
 
-function DriveCallbackNote({ status }: { status: "connected" | "cancelled" }) {
+function DriveCallbackNote({ status }: { status: "connected" | "cancelled" | "error" }) {
   if (status === "connected") {
     return (
       <p className="flex items-center gap-1.5 text-sm text-good">
         <CheckCircle weight="regular" className="size-4 shrink-0" aria-hidden="true" />
         Google Drive connected
+      </p>
+    );
+  }
+  if (status === "error") {
+    return (
+      <p className="flex items-center gap-1.5 text-sm text-serious">
+        <WarningCircle weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+        Could not connect Google Drive. Try again.
       </p>
     );
   }
@@ -60,6 +69,11 @@ function DriveSection() {
     driveConnect.mutate();
   }
 
+  function handleOpenConfirm() {
+    setDisconnectError(null);
+    setConfirmOpen(true);
+  }
+
   function handleDisconnect() {
     setDisconnectError(null);
     disconnectDrive.mutate(undefined, {
@@ -77,36 +91,50 @@ function DriveSection() {
         Browse and analyse recordings straight from your Google Drive.
       </p>
 
-      {(callbackStatus === "connected" || callbackStatus === "cancelled") && (
+      {(callbackStatus === "connected" || callbackStatus === "cancelled" || callbackStatus === "error") && (
         <div className="mt-3">
           <DriveCallbackNote status={callbackStatus} />
         </div>
       )}
 
       <div className="mt-3">
-        {me?.drive_configured === false ? (
+        {meQuery.isLoading ? (
+          <Skeleton className="h-9 w-48" />
+        ) : me?.drive_configured === false ? (
           <p className="text-sm text-muted-foreground">Google Drive is not configured on this server</p>
         ) : me?.drive_connected ? (
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1.5 text-sm text-good">
               <CheckCircle weight="regular" className="size-4 shrink-0" aria-hidden="true" />
-              Connected as {me.google_email}
+              {me.google_email ? `Connected as ${me.google_email}` : "Connected"}
             </span>
-            <Button type="button" variant="secondary" size="sm" onClick={() => setConfirmOpen(true)}>
+            <Button type="button" variant="secondary" size="sm" onClick={handleOpenConfirm}>
               Disconnect
             </Button>
           </div>
         ) : (
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col items-start gap-2">
             <Button type="button" variant="outline" onClick={handleConnect} disabled={driveConnect.isPending}>
               <GoogleDriveLogo weight="regular" className="size-4" />
               Connect Google Drive
             </Button>
+            {driveConnect.isError && (
+              <p role="alert" className="flex items-center gap-1.5 text-sm text-serious">
+                <WarningCircle weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+                {errorDetail(driveConnect.error)}
+              </p>
+            )}
           </div>
         )}
       </div>
 
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <Dialog
+        open={confirmOpen}
+        onOpenChange={(next) => {
+          setConfirmOpen(next);
+          if (next) setDisconnectError(null);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Disconnect Google Drive?</DialogTitle>
@@ -119,7 +147,12 @@ function DriveSection() {
             </p>
           )}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setConfirmOpen(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmOpen(false)}
+              disabled={disconnectDrive.isPending}
+            >
               Cancel
             </Button>
             <Button

@@ -172,8 +172,12 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
       void queryClient.invalidateQueries({ queryKey: ["vc", "jobs"] });
       setDriveFiles([]);
     } catch (error) {
-      // The backend creates jobs atomically: a failed POST created none, so the rows this
-      // batch added are pulled back out rather than shown as failed.
+      // Pulls this batch's rows back out rather than showing them as failed. For the
+      // pre-flight errors (409 not connected, 404 unreadable file, 413/415 size or type) the
+      // whole request is rejected before any job is created, so there is nothing to show as
+      // failed. A 503 part-way through a batch is the one case where some jobs were already
+      // created; the backend marks those failed server-side, so they still show up from the
+      // jobs list even though this transient progress view drops them here.
       setRows((prev) => prev.filter((row) => !batchKeys.includes(row.key)));
       setDriveSubmitError(driveErrorDetail(error));
     }
@@ -264,9 +268,13 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
         <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-4">
           <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "upload" | "drive")}>
             <TabsList>
-              <TabsTrigger value="upload">Upload</TabsTrigger>
+              <TabsTrigger value="upload" disabled={submitting}>
+                Upload
+              </TabsTrigger>
               {driveConfigured ? (
-                <TabsTrigger value="drive">Google Drive</TabsTrigger>
+                <TabsTrigger value="drive" disabled={submitting}>
+                  Google Drive
+                </TabsTrigger>
               ) : (
                 <TooltipProvider>
                   <Tooltip>
