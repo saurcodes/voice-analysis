@@ -82,6 +82,12 @@ def test_list_media_empty_folder_returns_empty_list(httpx_mock):
     assert _client().list_media("empty-folder") == []
 
 
+def test_list_media_page_with_no_files_key_returns_empty_list(httpx_mock):
+    httpx_mock.add_response(json={})
+
+    assert _client().list_media(None) == []
+
+
 def test_list_media_401_raises_drive_not_connected(httpx_mock):
     httpx_mock.add_response(status_code=401, json={"error": "unauthorized"})
 

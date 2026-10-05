@@ -856,6 +856,19 @@
         "title": "ComparisonRow",
         "type": "object"
       },
+      "ConnectUrl": {
+        "properties": {
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "ConnectUrl",
+        "type": "object"
+      },
       "DerivedBlock": {
         "properties": {
           "clarity": {
@@ -894,6 +907,46 @@
           "clarity"
         ],
         "title": "DerivedBlock",
+        "type": "object"
+      },
+      "DriveFileOut": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "mime_type": {
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "modified_time": {
+            "title": "Modified Time",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "mime_type",
+          "modified_time",
+          "size"
+        ],
+        "title": "DriveFileOut",
         "type": "object"
       },
       "EatenWord": {
@@ -1245,6 +1298,10 @@
       },
       "MeResponse": {
         "properties": {
+          "drive_configured": {
+            "title": "Drive Configured",
+            "type": "boolean"
+          },
           "drive_connected": {
             "title": "Drive Connected",
             "type": "boolean"
@@ -1259,6 +1316,17 @@
               }
             ],
             "title": "Email"
+          },
+          "google_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Email"
           },
           "id": {
             "format": "uuid",
@@ -1297,6 +1365,8 @@
           "email",
           "username",
           "drive_connected",
+          "drive_configured",
+          "google_email",
           "llm_enabled",
           "llm_provider"
         ],
@@ -2526,6 +2596,213 @@
         "summary": "Config Public",
         "tags": [
           "config"
+        ]
+      }
+    },
+    "/api/drive/callback": {
+      "get": {
+        "operationId": "callback_api_drive_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "303": {
+            "description": "redirect to the frontend settings page"
+          },
+          "400": {
+            "description": "invalid or expired OAuth state"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "description": "Google returned an error"
+          }
+        },
+        "summary": "Callback",
+        "tags": [
+          "drive"
+        ]
+      }
+    },
+    "/api/drive/connect": {
+      "delete": {
+        "operationId": "disconnect_api_drive_connect_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "drive_not_connected"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Disconnect",
+        "tags": [
+          "drive"
+        ]
+      },
+      "get": {
+        "operationId": "connect_api_drive_connect_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectUrl"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "description": "drive is not configured on this server"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Connect",
+        "tags": [
+          "drive"
+        ]
+      }
+    },
+    "/api/drive/files": {
+      "get": {
+        "operationId": "list_files_api_drive_files_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "folder_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Folder Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DriveFileOut"
+                  },
+                  "title": "Response List Files Api Drive Files Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "folder not found"
+          },
+          "409": {
+            "description": "drive_not_connected"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "description": "Google drive error"
+          },
+          "503": {
+            "description": "drive is not configured on this server"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Files",
+        "tags": [
+          "drive"
         ]
       }
     },

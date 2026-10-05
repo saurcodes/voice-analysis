@@ -10,7 +10,8 @@ from vocal_coach.drive.errors import DriveError
 
 STATE_MAX_AGE_S = 600
 _SALT = "drive-oauth"
-_INVALID_STATE_MESSAGE = "invalid or expired state"
+INVALID_STATE_MESSAGE = "invalid or expired state"
+_INVALID_STATE_MESSAGE = INVALID_STATE_MESSAGE  # back-compat alias for the original private name
 
 
 def sign_state(secret_key: str, user_id: uuid.UUID) -> str:
@@ -23,8 +24,8 @@ def verify_state(secret_key: str, state: str) -> uuid.UUID:
     try:
         payload = serializer.loads(state, max_age=STATE_MAX_AGE_S)
     except (BadSignature, SignatureExpired) as exc:
-        raise DriveError(_INVALID_STATE_MESSAGE) from exc
+        raise DriveError(INVALID_STATE_MESSAGE) from exc
     try:
         return uuid.UUID(payload["user_id"])
     except (KeyError, TypeError, ValueError) as exc:
-        raise DriveError(_INVALID_STATE_MESSAGE) from exc
+        raise DriveError(INVALID_STATE_MESSAGE) from exc

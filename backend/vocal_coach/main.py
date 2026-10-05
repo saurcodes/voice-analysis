@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import Engine
 
 from vocal_coach.analysis.audio import check_ffmpeg
-from vocal_coach.api import analyses, comparisons, config_public, jobs, llm, me
+from vocal_coach.api import analyses, comparisons, config_public, drive, jobs, llm, me
 from vocal_coach.auth.jwt import AuthError, JWKSCache
 from vocal_coach.config import AppConfig, load_config
 from vocal_coach.jobs.runner import JobRunner
@@ -67,7 +67,8 @@ def create_app(
     async def _auth_error(_request, exc: AuthError):
         return JSONResponse({"detail": f"invalid token: {exc}"}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
 
-    for router in (me.router, config_public.router, llm.router, analyses.router, jobs.router, comparisons.router):
+    for router in (me.router, config_public.router, llm.router, analyses.router, jobs.router, comparisons.router,
+                   drive.router):
         app.include_router(router, prefix=API_PREFIX)
     return app
 

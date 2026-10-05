@@ -20,11 +20,15 @@ ISS = "http://kc.test/realms/vocal-coach"
 AUD = "vocal-coach-web"
 
 
-def make_test_app(tmp_path: Path, *, job_fn=None, max_upload_mb: int = 500, cfg=None):
+def make_test_app(tmp_path: Path, *, job_fn=None, max_upload_mb: int = 500, cfg=None,
+                  settings_overrides: dict | None = None):
     pem, jwks, kid = make_rsa_jwks()
-    settings = Settings(_env_file=None, database_url=f"sqlite+pysqlite:///{tmp_path / 't.db'}",
-                        keycloak_issuer=ISS, keycloak_audience=AUD, data_dir=tmp_path / "data",
-                        max_upload_mb=max_upload_mb, require_ffmpeg=False, job_workers=1)
+    settings_kwargs = dict(_env_file=None, database_url=f"sqlite+pysqlite:///{tmp_path / 't.db'}",
+                           keycloak_issuer=ISS, keycloak_audience=AUD, data_dir=tmp_path / "data",
+                           max_upload_mb=max_upload_mb, require_ffmpeg=False, job_workers=1)
+    if settings_overrides:
+        settings_kwargs.update(settings_overrides)
+    settings = Settings(**settings_kwargs)
     cfg = cfg or load_config()
     engine = make_engine(settings.database_url)
     create_all(engine)
