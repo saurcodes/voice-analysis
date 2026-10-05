@@ -133,8 +133,12 @@ async def retry_job(job_id: uuid.UUID, request: Request, user: CurrentUser = Dep
         return await _retry_drive_job(request, session, user, job)
     if job.source_sha256 is None:  # legacy Drive job with no stored file id: nothing left to retry from
         raise HTTPException(status.HTTP_410_GONE, DRIVE_GONE)
+    # Serialises against a concurrent delete of an analysis made from the same upload: whichever side
+    # gets the lock first runs to completion (and commits) before the other's find_upload/count runs.
+    repo.lock_source_refs(session, user.id, job.source_sha256)
     found = paths.find_upload(request.app.state.settings.data_dir, user.id, job.source_sha256)
     if found is None:
+        session.rollback()  # not required (the dependency closes the session) but releases the lock promptly
         raise HTTPException(status.HTTP_410_GONE, "the uploaded file is no longer stored; upload it again")
     new = repo.create_job(session, user.id, file_name=job.file_name, source_sha256=job.source_sha256,
                           recorded_at=job.recorded_at)

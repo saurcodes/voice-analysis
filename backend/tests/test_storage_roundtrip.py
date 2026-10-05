@@ -78,23 +78,21 @@ def test_metrics_and_transcript_round_trip_and_compare(cfg, session, tmp_path):
 )
 def test_delete_and_retry_race_never_leaves_a_job_pointing_at_a_missing_upload(tmp_path):
     """`repo.delete_analysis_and_count_refs` (storage/repo.py) locks the user's analyses rows
-    sharing `source_sha256` before counting references, so the decision to remove the upload is
-    made from a consistent, committed view of who still needs it (spec amendment 3, Plan 8 Task 3).
+    sharing `source_sha256` before counting references, removing the upload (via `on_unreferenced`)
+    before the commit that releases the lock, so the decision to remove the upload is made from a
+    consistent, committed view of who still needs it (spec amendment 3, Plan 8 Task 3).
 
     This only runs against real Postgres (`with_for_update()` is a no-op on SQLite, which the rest
     of the suite uses); it is skipped when Docker is unavailable.
 
-    A full close of the race against `POST /jobs/{id}/retry` also needs that endpoint (owned by a
-    different Plan 8 task, `api/jobs.py`) to hold the same per-hash lock across its own
-    find-upload-then-create-job sequence; this test's `_retry_with_lock` helper stands in for that
-    future change by taking the identical `with_for_update()` lock before its own check, so the two
-    sides here are coordinated the way production should end up being.
+    A full close of the race against `POST /jobs/{id}/retry` also needs that endpoint to hold the
+    same per-hash lock across its own find-upload-then-create-job sequence; this test's
+    `_retry_with_lock` helper exercises the real `repo.lock_source_refs`, the same helper the retry
+    route calls, so the two sides here are coordinated the way production actually is.
     """
-    from sqlalchemy import select
     from testcontainers.postgres import PostgresContainer
 
     from vocal_coach.storage.migrate import upgrade_to_head
-    from vocal_coach.storage.models import Analysis
 
     with PostgresContainer("postgres:16-alpine", driver="psycopg") as pg:
         url = pg.get_connection_url()
@@ -121,21 +119,18 @@ def test_delete_and_retry_race_never_leaves_a_job_pointing_at_a_missing_upload(t
 
             def _delete(user_id: uuid.UUID, analysis_id: uuid.UUID) -> int:
                 with factory() as s:
-                    _deleted, refs = repo.delete_analysis_and_count_refs(s, user_id, analysis_id, source_sha256)
-                if not refs:
-                    paths.remove_upload(data_dir, user_id, source_sha256)
+                    _deleted, refs, _drive_refs = repo.delete_analysis_and_count_refs(
+                        s, user_id, analysis_id, source_sha256,
+                        on_unreferenced=lambda: paths.remove_upload(data_dir, user_id, source_sha256),
+                    )
                 return refs
 
             def _retry_with_lock(user_id: uuid.UUID) -> uuid.UUID | None:
                 """Stands in for `POST /jobs/{id}/retry`'s own guard (it already checks
-                `paths.find_upload` before creating the job): takes the same lock
-                `delete_analysis_and_count_refs` takes, so the two sides serialise."""
+                `paths.find_upload` before creating the job): calls the real `repo.lock_source_refs`,
+                the same helper the retry route calls, so the two sides serialise."""
                 with factory() as s:
-                    s.execute(
-                        select(Analysis.id)
-                        .where(Analysis.user_id == user_id, Analysis.source_sha256 == source_sha256)
-                        .with_for_update()
-                    )
+                    repo.lock_source_refs(s, user_id, source_sha256)
                     found = paths.find_upload(data_dir, user_id, source_sha256)
                     if found is None:
                         s.rollback()

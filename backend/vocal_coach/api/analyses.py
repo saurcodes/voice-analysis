@@ -163,20 +163,6 @@ async def _store_upload(file: UploadFile, data_dir: Path, user_id: uuid.UUID, ma
     return final, sha, size
 
 
-def _runner_available(runner: object) -> bool:
-    """True unless the job runner cannot currently accept work.
-
-    Prefers the runner's own `available()` (Task 1, Plan 8: `JobRunner.available()`); until that
-    lands, falls back to checking its executor directly so this pre-check works without editing
-    `vocal_coach.jobs.runner` (owned by a concurrent implementer in this worktree). A runner object
-    with neither attribute (e.g. a minimal test double) is treated as available.
-    """
-    check = getattr(runner, "available", None)
-    if callable(check):
-        return bool(check())
-    return getattr(runner, "_executor", True) is not None
-
-
 def _create_upload_job(
     session_factory, request: Request, user_id: uuid.UUID, *, file_name: str, source_sha256: str,
     recorded_at: datetime, source_path: Path, speaker_context: str | None, llm_enabled: bool, llm_model: str | None,
@@ -303,7 +289,7 @@ async def create_analysis(
         ext = Path(file.filename or "").suffix.lower().lstrip(".")
         if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"unsupported file type .{ext}; allowed: {sorted(ALLOWED_EXTENSIONS)}")
-        if not _runner_available(request.app.state.runner):
+        if not request.app.state.runner.available():
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "job runner unavailable")
         settings = request.app.state.settings
         path, sha, _size = await _store_upload(file, settings.data_dir, user.id, settings.max_upload_bytes)
@@ -359,11 +345,12 @@ def delete_analysis(analysis_id: uuid.UUID, request: Request, user: CurrentUser 
         raise HTTPException(404, "analysis not found")
     source_sha = row.source_sha256  # the upload's name; content_sha256 is the extracted WAV's hash
     drive_file_id = row.drive_file_id
-    _deleted, refs = repo.delete_analysis_and_count_refs(session, user.id, analysis_id, source_sha)
-    if source_sha and not refs:
-        paths.remove_upload(request.app.state.settings.data_dir, user.id, source_sha)
-    # Drive-sourced: once no analysis of this user's references the file any more, its cached
-    # download(s) are removed too (bounded by Plan 8's cache lifecycle).
-    if drive_file_id and repo.count_drive_refs(session, user.id, drive_file_id) == 0:
-        drive_cache.remove_for_file(request.app.state.settings.data_dir, user.id, drive_file_id)
+    settings = request.app.state.settings
+    repo.delete_analysis_and_count_refs(
+        session, user.id, analysis_id, source_sha, drive_file_id,
+        on_unreferenced=lambda: paths.remove_upload(settings.data_dir, user.id, source_sha),
+        # Drive-sourced: once no analysis of this user's references the file any more, its cached
+        # download(s) are removed too (bounded by Plan 8's cache lifecycle).
+        on_drive_unreferenced=lambda: drive_cache.remove_for_file(settings.data_dir, user.id, drive_file_id),
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -440,6 +440,9 @@ def test_upload_returns_503_and_fails_job_when_runner_unavailable(tmp_path):
     from vocal_coach.jobs.runner import RunnerUnavailable
 
     class DeadRunner:
+        def available(self):
+            return True  # the pre-check passes; submit() is what fails
+
         def submit(self, req):
             raise RunnerUnavailable("job runner unavailable")
 
