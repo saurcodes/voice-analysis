@@ -73,6 +73,15 @@ feeds the re-run dialog's model list and the upload drawer's LLM switch. When th
 number or markup mismatch the backend's post-checks catch is shown under a "Checks" heading
 on the coaching output itself, not just in the dialog.
 
+## Google Drive
+
+When the backend reports `drive_configured: true` (via `GET /api/me`), Settings shows a Connect
+button for linking the signed-in user's own Google Drive, and the Analyse drawer gains a Drive tab
+that lists audio/video files by folder id for picking files to analyse without uploading. Otherwise
+both show a "Google Drive is not configured on this server" state instead; once configured but not
+yet linked for this user (`drive_connected: false`), Settings shows Connect and the Drive tab shows
+a connect prompt instead of a file list.
+
 ## SSE client
 
 `src/api/sse.ts` is a fetch-based client (native `EventSource` cannot send an `Authorization`

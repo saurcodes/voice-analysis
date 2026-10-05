@@ -263,3 +263,76 @@ a second failure (or any provider exception: network, auth, HTTP status, timeout
   coaching is disabled, `422` when the requested (or configured) model is rejected by a non-empty
   `allowed_models`, or when no model is requested or configured and the provider is not `anthropic`
   (no default model to fall back to).
+
+## Google Drive (Plan 7)
+
+Each signed-in user can link their own Google Drive and analyse files from it without uploading.
+This is separate from signing in with Keycloak: linking Drive is a second, per-user OAuth grant to
+Google, stored as its own connection row.
+
+### 1. Google Cloud Console setup
+
+1. In the Google Cloud Console, go to APIs and Services > Credentials and create an OAuth 2.0
+   Client ID of type "Web application".
+2. In APIs and Services > Library, enable the Google Drive API for the project.
+3. Add the authorised redirect URI exactly as the backend will send it (see `GOOGLE_REDIRECT_URI`
+   below); Google rejects a mismatch with `redirect_uri_mismatch`.
+4. While the OAuth consent screen is in "Testing" mode, add each Google account that will link
+   Drive as a test user, or Google refuses the consent screen with `access_denied`.
+
+### 2. Environment keys
+
+- `SECRET_KEY`: signs and verifies the OAuth `state` parameter. Generate with:
+  `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`.
+- `DRIVE_TOKEN_KEY`: a Fernet key that encrypts stored Drive refresh tokens. Generate with:
+  `backend/.venv/bin/python -c "from vocal_coach.drive.crypto import generate_key; print(generate_key())"`.
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`: from the OAuth client created above.
+- `GOOGLE_REDIRECT_URI`: must match the Google Cloud Console entry exactly. Under
+  `docker compose` it defaults to `http://localhost:3000/api/drive/callback`, so the browser's OAuth
+  round trip stays on the frontend origin and passes through the nginx `/api` proxy; a bare
+  `uvicorn --reload` dev loop against the backend directly defaults to
+  `http://localhost:8000/api/drive/callback` instead. See `.env.example`.
+
+`/me.drive_configured` is `false` until `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and
+`DRIVE_TOKEN_KEY` are all set.
+
+### 3. How linking works
+
+Linking Drive is independent of the Keycloak session: a user can be signed in without Drive linked,
+or (in principle) have Drive linked and then sign out of Keycloak without affecting the Drive
+connection. The OAuth `state` parameter is signed with `SECRET_KEY` and binds the connection to the
+`user_id` that started the flow, with a 10 minute expiry. Only the refresh token is stored, and only
+Fernet-encrypted with `DRIVE_TOKEN_KEY`; an access token is fetched from Google per request and is
+never stored, logged or returned by any endpoint. Disconnecting revokes the token at Google and
+deletes the stored connection row.
+
+### 4. Endpoints
+
+- `GET /api/drive/connect` builds the Google consent URL (scopes `drive.readonly` and
+  `userinfo.email`). `503 {"detail": "drive is not configured on this server"}` when
+  `drive_configured` is false.
+- `GET /api/drive/callback` exchanges the authorization code, stores the encrypted refresh token and
+  `google_email`, and redirects back to the frontend. A tampered or expired `state` is
+  `400 {"detail": "invalid or expired state"}`.
+- `DELETE /api/drive/connect` revokes the token at Google and removes the connection row.
+- `GET /api/drive/files?folder_id=` lists audio/video files in a Drive folder. `409
+  {"detail": "drive_not_connected"}` when the user has not linked Drive, including after Google
+  reports the refresh token revoked (`invalid_grant`), which deletes the stale connection row first.
+  A Google error otherwise is `502 {"detail": "google drive error <status>"}`.
+- `GET /api/me` adds `drive_configured` (server has credentials), `drive_connected` (this user has a
+  stored connection) and `google_email` (the linked account, or `null`).
+
+### 5. Cache
+
+A downloaded Drive file is cached at `DATA_DIR/cache/<user_id>/<file_id>__<modifiedTime>.<ext>`, so
+a re-analysis of the same file version is a cache hit and a changed `modifiedTime` downloads again.
+The cache is not pruned yet (Plan 8); cached files accumulate until that lands.
+
+### 6. Troubleshooting
+
+- `redirect_uri_mismatch`: the Console's authorised redirect URI does not exactly match
+  `GOOGLE_REDIRECT_URI` (scheme, host, port and path all matter).
+- `access_denied`: the signed-in Google account is not added as a test user while the consent
+  screen is in Testing mode.
+- Drive tab or connect button suddenly shows "not connected" again: the user revoked access from
+  their Google account (or the refresh token otherwise became invalid); reconnect from Settings.

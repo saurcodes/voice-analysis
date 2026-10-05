@@ -54,6 +54,13 @@ services:
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-500}
       OPENAI_COMPAT_API_KEY: ${OPENAI_COMPAT_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
+      DRIVE_TOKEN_KEY: ${DRIVE_TOKEN_KEY:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # The browser round trip for the OAuth callback stays on the frontend origin, through the
+      # nginx /api proxy, so this defaults to :3000 (compose) rather than the backend's own :8000.
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/drive/callback}
       # config.yaml's llm.base_url defaults to a local Ollama at localhost:11434, which does not
       # resolve inside the container; this points it at the host instead (see backend/README.md).
       LLM_BASE_URL_OVERRIDE: ${LLM_BASE_URL_OVERRIDE-http://host.docker.internal:11434/v1}
