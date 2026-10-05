@@ -4,7 +4,8 @@ import { http, HttpResponse } from "msw";
 import { renderWithProviders } from "@/test/render";
 import { ApiError } from "@/api/client";
 import { server } from "@/test/msw";
-import { llmEnabledHandlers } from "@/test/handlers";
+import { driveConfiguredHandlers, llmEnabledHandlers } from "@/test/handlers";
+import { driveFile } from "@/test/fixtures";
 import { AnalyseDrawer } from "./AnalyseDrawer";
 import * as uploadModule from "@/api/upload";
 
@@ -86,10 +87,82 @@ test("with coaching enabled on the server, the switch is enabled, toggling it re
   expect(fields).toMatchObject({ llm_enabled: true, llm_model: "qwen3:8b" });
 });
 
-test("the Google Drive tab is disabled", () => {
+test("the Google Drive tab is disabled with a not-configured note when the server has no Google credentials", async () => {
   renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
 
-  expect(screen.getByRole("tab", { name: "Google Drive" })).toBeDisabled();
+  expect(await screen.findByRole("tab", { name: "Google Drive" })).toBeDisabled();
+  expect(screen.getByText("Google Drive is not configured on this server")).toBeInTheDocument();
+});
+
+test("the Google Drive tab is enabled when the server has Google credentials configured", async () => {
+  server.use(...driveConfiguredHandlers());
+  renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
+
+  await waitFor(() => expect(screen.getByRole("tab", { name: "Google Drive" })).toBeEnabled());
+});
+
+test("submitting two Drive files posts the JSON body and renders two progress rows named after the files", async () => {
+  server.use(...driveConfiguredHandlers());
+  server.use(
+    http.get("/api/drive/files", () =>
+      HttpResponse.json([
+        driveFile({ id: "drive-1", name: "pitch.wav" }),
+        driveFile({ id: "drive-2", name: "cold-open.wav" }),
+      ]),
+    ),
+  );
+  let capturedBody: unknown;
+  server.use(
+    http.post("/api/analyses", async ({ request }) => {
+      capturedBody = await request.json();
+      return HttpResponse.json({ job_ids: ["job-drive-1", "job-drive-2"] }, { status: 202 });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
+
+  await waitFor(() => expect(screen.getByRole("tab", { name: "Google Drive" })).toBeEnabled());
+  await user.click(screen.getByRole("tab", { name: "Google Drive" }));
+  await user.click(await screen.findByRole("checkbox", { name: "Select pitch.wav" }));
+  await user.click(await screen.findByRole("checkbox", { name: "Select cold-open.wav" }));
+
+  await user.type(screen.getByLabelText("Speaker context"), "Real estate pitch");
+
+  await user.click(screen.getByRole("button", { name: "Analyse 2 files" }));
+
+  await waitFor(() =>
+    expect(capturedBody).toEqual({
+      source: "drive",
+      file_ids: ["drive-1", "drive-2"],
+      speaker_context: "Real estate pitch",
+      llm: { enabled: false, model: null },
+    }),
+  );
+
+  expect(await screen.findByText("Progress")).toBeInTheDocument();
+  expect(screen.getAllByText("pitch.wav").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("cold-open.wav").length).toBeGreaterThan(0);
+});
+
+test("a 409 from the Drive submit shows a Connect-Google-Drive note inline", async () => {
+  server.use(...driveConfiguredHandlers());
+  server.use(
+    http.get("/api/drive/files", () => HttpResponse.json([driveFile({ id: "drive-1", name: "pitch.wav" })])),
+  );
+  server.use(
+    http.post("/api/analyses", () => HttpResponse.json({ detail: "drive_not_connected" }, { status: 409 })),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<AnalyseDrawer open onOpenChange={vi.fn()} />);
+
+  await waitFor(() => expect(screen.getByRole("tab", { name: "Google Drive" })).toBeEnabled());
+  await user.click(screen.getByRole("tab", { name: "Google Drive" }));
+  await user.click(await screen.findByRole("checkbox", { name: "Select pitch.wav" }));
+  await user.click(screen.getByRole("button", { name: "Analyse 1 file" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Connect Google Drive in Settings");
 });
 
 test("a 415 from the server shows its detail inline on that file's row", async () => {

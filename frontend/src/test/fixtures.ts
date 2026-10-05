@@ -15,6 +15,18 @@ type MetricsReport = components["schemas"]["MetricsReport"];
 type Transcript = components["schemas"]["Transcript"];
 type TranscriptWord = components["schemas"]["TranscriptWord"];
 type TranscriptSegment = components["schemas"]["TranscriptSegment"];
+type DriveFileOut = components["schemas"]["DriveFileOut"];
+
+export function driveFile(overrides: Partial<DriveFileOut> = {}): DriveFileOut {
+  return {
+    id: "drive-file-0001",
+    name: "pitch-practice.m4a",
+    mime_type: "audio/mp4",
+    modified_time: "2026-09-30T09:15:00Z",
+    size: 2_400_000,
+    ...overrides,
+  };
+}
 
 export function summary(overrides: Partial<AnalysisSummary> = {}): AnalysisSummary {
   return {

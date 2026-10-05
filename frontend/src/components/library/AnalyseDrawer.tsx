@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Warning } from "@phosphor-icons/react";
+import { Warning, WarningCircle } from "@phosphor-icons/react";
 import { useAuthState } from "@/auth/context";
 import { ApiError } from "@/api/client";
-import { useLlmModels, useMe } from "@/api/hooks";
+import { useCreateDriveAnalyses, useLlmModels, useMe } from "@/api/hooks";
 import { uploadAnalysis } from "@/api/upload";
+import type { components } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -26,8 +27,13 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { DriveBrowser } from "./DriveBrowser";
 import { JobProgressList, type JobProgressItem } from "./JobProgressList";
 import { UploadDropzone } from "./UploadDropzone";
+
+type DriveFileOut = components["schemas"]["DriveFileOut"];
+
+const DRIVE_NOT_CONFIGURED = "Google Drive is not configured on this server";
 
 const PROVIDER_UNAVAILABLE = "Coaching provider is unavailable right now";
 
@@ -42,6 +48,14 @@ function errorDetail(error: unknown): string {
   return "Upload failed";
 }
 
+function driveErrorDetail(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 409) return "Connect Google Drive in Settings";
+    return typeof error.detail === "string" ? error.detail : error.message;
+  }
+  return "Something went wrong. Try again.";
+}
+
 export interface AnalyseDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -51,17 +65,23 @@ export interface AnalyseDrawerProps {
 }
 
 /**
- * The "Analyse" side panel: pick files (upload tab; Drive is a disabled placeholder until
- * Plan 7), add speaker context, optionally enable coaching, then upload sequentially. Each
- * file becomes a JobProgressList row that starts as an upload-progress bar and, once the
- * server returns a job id, switches to live job-stage progress.
+ * The "Analyse" side panel: pick files (Upload tab) or browse the user's own Google Drive
+ * (Drive tab, enabled once the server has Google OAuth configured), add speaker context,
+ * optionally enable coaching, then submit. An Upload-tab file becomes a JobProgressList row
+ * that starts as an upload-progress bar and, once the server returns a job id, switches to
+ * live job-stage progress; a Drive-tab file has no upload step, so its row starts watching
+ * the job (download stage onward) as soon as the single batch POST returns job ids.
  */
 export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDrawerProps) {
   const { getToken } = useAuthState();
   const queryClient = useQueryClient();
   const meQuery = useMe();
+  const createDriveAnalyses = useCreateDriveAnalyses();
 
+  const [activeTab, setActiveTab] = useState<"upload" | "drive">("upload");
   const [files, setFiles] = useState<File[]>([]);
+  const [driveFiles, setDriveFiles] = useState<DriveFileOut[]>([]);
+  const [driveSubmitError, setDriveSubmitError] = useState<string | null>(null);
   const [speakerContext, setSpeakerContext] = useState("");
   const [llmEnabled, setLlmEnabled] = useState(false);
   // The model list is only fetched once the user actually asks for coaching (drawer open, server
@@ -77,6 +97,7 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
   const [rows, setRows] = useState<JobProgressItem[]>([]);
   const batchRef = useRef(0);
 
+  const driveConfigured = meQuery.data?.drive_configured === true;
   const llmDisabled = meQuery.data?.llm_enabled === false;
   const llmModels = llmModelsQuery.data?.models ?? [];
   const llmModel =
@@ -94,7 +115,10 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
   const modelsLoading = llmEnabled && !llmDisabled && !modelsUnavailable && llmModel === "";
 
   function resetForm() {
+    setActiveTab("upload");
     setFiles([]);
+    setDriveFiles([]);
+    setDriveSubmitError(null);
     setSpeakerContext("");
     setLlmEnabled(false);
     setLlmModelOverride(null);
@@ -113,7 +137,51 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
     onOpenChange(next);
   }
 
-  async function handleSubmit() {
+  async function handleDriveSubmit() {
+    if (driveFiles.length === 0 || submitting || modelsLoading) return;
+    setSubmitting(true);
+    setDriveSubmitError(null);
+    batchRef.current += 1;
+    const batch = batchRef.current;
+    const batchFiles = driveFiles;
+    const batchKeys = batchFiles.map((file, index) => `${batch}-drive-${file.id}-${index}`);
+
+    // One row per file, added before the request resolves (no per-file upload step exists
+    // for Drive sources, so this is the only "something is happening" feedback until the
+    // batch POST comes back with job ids).
+    const batchRows: JobProgressItem[] = batchFiles.map((file, index) => ({
+      key: batchKeys[index],
+      fileName: file.name,
+    }));
+    setRows((prev) => [...prev, ...batchRows]);
+
+    try {
+      const result = await createDriveAnalyses.mutateAsync({
+        source: "drive",
+        file_ids: batchFiles.map((file) => file.id),
+        speaker_context: speakerContext.trim() || null,
+        llm: { enabled: coachingRequested, model: coachingRequested ? llmModel : null },
+      });
+      setRows((prev) =>
+        prev.map((row) => {
+          const index = batchKeys.indexOf(row.key);
+          return index === -1 ? row : { ...row, jobId: result.job_ids[index] };
+        }),
+      );
+      onJobsCreated?.(result.job_ids);
+      void queryClient.invalidateQueries({ queryKey: ["vc", "jobs"] });
+      setDriveFiles([]);
+    } catch (error) {
+      // The backend creates jobs atomically: a failed POST created none, so the rows this
+      // batch added are pulled back out rather than shown as failed.
+      setRows((prev) => prev.filter((row) => !batchKeys.includes(row.key)));
+      setDriveSubmitError(driveErrorDetail(error));
+    }
+
+    setSubmitting(false);
+  }
+
+  async function handleUploadSubmit() {
     if (files.length === 0 || submitting || modelsLoading) return;
     setSubmitting(true);
     batchRef.current += 1;
@@ -172,7 +240,8 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
     onJobsCreated?.([newJobId]);
   }
 
-  const submitLabel = `Analyse ${files.length} file${files.length === 1 ? "" : "s"}`;
+  const activeCount = activeTab === "drive" ? driveFiles.length : files.length;
+  const submitLabel = `Analyse ${activeCount} file${activeCount === 1 ? "" : "s"}`;
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -193,37 +262,55 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
         </SheetHeader>
 
         <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-4">
-          <Tabs defaultValue="upload">
+          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "upload" | "drive")}>
             <TabsList>
               <TabsTrigger value="upload">Upload</TabsTrigger>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="flex-1">
-                      <TabsTrigger
-                        value="drive"
-                        disabled
-                        aria-describedby="drive-tab-note"
-                        className="pointer-events-none w-full"
-                      >
-                        Google Drive
-                      </TabsTrigger>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>Available in a later release</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              {driveConfigured ? (
+                <TabsTrigger value="drive">Google Drive</TabsTrigger>
+              ) : (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="flex-1">
+                        <TabsTrigger
+                          value="drive"
+                          disabled
+                          aria-describedby="drive-tab-note"
+                          className="pointer-events-none w-full"
+                        >
+                          Google Drive
+                        </TabsTrigger>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>{DRIVE_NOT_CONFIGURED}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
             </TabsList>
             {/* Tooltip content only reaches pointer users; a disabled button gets no hover
                 from assistive tech or keyboard focus, so the same explanation is also a
                 plain visible line the disabled trigger's aria-describedby points at. */}
-            <p id="drive-tab-note" className="text-xs text-muted-foreground">
-              Google Drive import is available in a later release
-            </p>
+            {!driveConfigured && (
+              <p id="drive-tab-note" className="text-xs text-muted-foreground">
+                {DRIVE_NOT_CONFIGURED}
+              </p>
+            )}
             <TabsContent value="upload">
               <UploadDropzone files={files} onFilesChange={setFiles} disabled={submitting} />
             </TabsContent>
-            <TabsContent value="drive" />
+            <TabsContent value="drive" className="flex flex-col gap-3">
+              <DriveBrowser
+                selected={driveFiles}
+                onChange={setDriveFiles}
+                enabled={open && activeTab === "drive"}
+              />
+              {driveSubmitError && (
+                <p role="alert" className="flex items-center gap-1.5 text-sm text-serious">
+                  <WarningCircle weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+                  {driveSubmitError}
+                </p>
+              )}
+            </TabsContent>
           </Tabs>
 
           <div className="flex flex-col gap-2">
@@ -289,13 +376,13 @@ export function AnalyseDrawer({ open, onOpenChange, onJobsCreated }: AnalyseDraw
         <SheetFooter>
           {submitting && (
             <p role="status" className="text-sm text-muted-foreground">
-              Uploads in progress
+              {activeTab === "drive" ? "Submitting" : "Uploads in progress"}
             </p>
           )}
           <Button
             type="button"
-            onClick={() => void handleSubmit()}
-            disabled={files.length === 0 || submitting || modelsLoading}
+            onClick={() => void (activeTab === "drive" ? handleDriveSubmit() : handleUploadSubmit())}
+            disabled={activeCount === 0 || submitting || modelsLoading}
           >
             {submitLabel}
           </Button>

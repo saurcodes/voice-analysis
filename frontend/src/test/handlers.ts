@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import type { components } from "@/api/types";
-import { analysisDetail, coaching, comparison, jobStatus, summary } from "./fixtures";
+import { analysisDetail, coaching, comparison, driveFile, jobStatus, summary } from "./fixtures";
 
 /**
  * MSW handlers for every endpoint the app calls. Covers auth bootstrap, config and LLM
@@ -74,10 +74,23 @@ const meResponse: components["schemas"]["MeResponse"] = {
   id: "00000000-0000-0000-0000-000000000001",
   email: "demo@example.com",
   username: "Demo User",
+  drive_configured: false,
   drive_connected: false,
+  google_email: null,
   llm_enabled: false,
   llm_provider: null,
 };
+
+const driveFileList: components["schemas"]["DriveFileOut"][] = [
+  driveFile(),
+  driveFile({
+    id: "drive-file-0002",
+    name: "cold-open.wav",
+    mime_type: "audio/wav",
+    modified_time: "2026-10-01T11:00:00Z",
+    size: 5_600_000,
+  }),
+];
 
 const llmModels: components["schemas"]["LlmModels"] = {
   enabled: false,
@@ -140,11 +153,30 @@ export const handlers = [
   }),
 
   http.post("/api/analyses", async ({ request }) => {
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const body = (await request.json()) as { file_ids?: string[] };
+      const fileIds = body.file_ids ?? [];
+      return HttpResponse.json({ job_ids: fileIds.map((id) => `job-for-${id}`) }, { status: 202 });
+    }
     const form = await request.formData();
     if (!(form.get("file") instanceof File)) {
       return HttpResponse.json({ detail: "file is required" }, { status: 422 });
     }
     return HttpResponse.json({ job_ids: [jobStatus().id] }, { status: 202 });
+  }),
+
+  http.get("/api/drive/connect", () => HttpResponse.json({ url: "https://accounts.google.com/o/oauth2/v2/auth?mock=1" })),
+
+  http.delete("/api/drive/connect", () => new HttpResponse(null, { status: 204 })),
+
+  http.get("/api/drive/files", ({ request }) => {
+    const url = new URL(request.url);
+    const folderId = url.searchParams.get("folder_id");
+    if (folderId === "missing-folder") {
+      return HttpResponse.json({ detail: "folder not found" }, { status: 404 });
+    }
+    return HttpResponse.json(driveFileList);
   }),
 
   http.get("/api/analyses/:id", ({ params }) =>
@@ -210,6 +242,26 @@ export function llmEnabledHandlers(models: string[] = ["qwen3:8b", "llama3.2:lat
     ),
     http.get("/api/llm/models", () =>
       HttpResponse.json({ enabled: true, provider: "openai_compatible", models }),
+    ),
+  ];
+}
+
+/** Server has Google OAuth credentials configured, so /drive/connect and /drive/files are
+ * live (default meResponse leaves drive_configured false, the much more common case). */
+export function driveConfiguredHandlers() {
+  return [http.get("/api/me", () => HttpResponse.json({ ...meResponse, drive_configured: true }))];
+}
+
+/** The signed-in user has already linked their Drive account. */
+export function driveConnectedHandlers(googleEmail = "coach@gmail.com") {
+  return [
+    http.get("/api/me", () =>
+      HttpResponse.json({
+        ...meResponse,
+        drive_configured: true,
+        drive_connected: true,
+        google_email: googleEmail,
+      }),
     ),
   ];
 }

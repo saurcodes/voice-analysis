@@ -108,6 +108,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/drive/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Callback */
+        get: operations["callback_api_drive_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/drive/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Connect */
+        get: operations["connect_api_drive_connect_get"];
+        put?: never;
+        post?: never;
+        /** Disconnect */
+        delete: operations["disconnect_api_drive_connect_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/drive/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Files */
+        get: operations["list_files_api_drive_files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs": {
         parameters: {
             query?: never;
@@ -476,6 +528,11 @@ export interface components {
              */
             verdict: "improved" | "worsened" | "neutral" | "unchanged" | "unavailable";
         };
+        /** ConnectUrl */
+        ConnectUrl: {
+            /** Url */
+            url: string;
+        };
         /** DerivedBlock */
         DerivedBlock: {
             clarity: components["schemas"]["ClarityBlock"];
@@ -491,6 +548,19 @@ export interface components {
             word_count: number;
             /** Words Per Min */
             words_per_min: number;
+        };
+        /** DriveFileOut */
+        DriveFileOut: {
+            /** Id */
+            id: string;
+            /** Mime Type */
+            mime_type: string;
+            /** Modified Time */
+            modified_time: string;
+            /** Name */
+            name: string;
+            /** Size */
+            size: number | null;
         };
         /** EatenWord */
         EatenWord: {
@@ -611,10 +681,14 @@ export interface components {
         };
         /** MeResponse */
         MeResponse: {
+            /** Drive Configured */
+            drive_configured: boolean;
             /** Drive Connected */
             drive_connected: boolean;
             /** Email */
             email: string | null;
+            /** Google Email */
+            google_email: string | null;
             /**
              * Id
              * Format: uuid
@@ -1147,6 +1221,171 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PublicConfig"];
                 };
+            };
+        };
+    };
+    callback_api_drive_callback_get: {
+        parameters: {
+            query?: {
+                code?: string | null;
+                state?: string | null;
+                error?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description redirect to the frontend settings page */
+            303: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description invalid or expired OAuth state */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Google returned an error */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    connect_api_drive_connect_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectUrl"];
+                };
+            };
+            /** @description drive is not configured on this server */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    disconnect_api_drive_connect_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description drive_not_connected */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_files_api_drive_files_get: {
+        parameters: {
+            query?: {
+                folder_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveFileOut"][];
+                };
+            };
+            /** @description folder not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description drive_not_connected */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Google drive error */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description drive is not configured on this server */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

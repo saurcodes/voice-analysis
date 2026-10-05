@@ -19,7 +19,18 @@ type AnalysisSummary = components["schemas"]["AnalysisSummary"];
 type AnalysisDetail = components["schemas"]["AnalysisDetail"];
 type JobStatus = components["schemas"]["JobStatus"];
 type JobId = components["schemas"]["JobId"];
+type JobIds = components["schemas"]["JobIds"];
 type ComparisonResult = components["schemas"]["ComparisonResult"];
+type ConnectUrl = components["schemas"]["ConnectUrl"];
+type DriveFileOut = components["schemas"]["DriveFileOut"];
+
+/** Mirrors backend DriveAnalysisRequest; replace with the generated type once exported. */
+export interface DriveAnalysisRequest {
+  source: "drive";
+  file_ids: string[];
+  speaker_context: string | null;
+  llm: { enabled: boolean; model: string | null };
+}
 
 const ACTIVE_JOB_STATUSES: ReadonlySet<JobStatus["status"]> = new Set(["queued", "running"]);
 const JOBS_REFETCH_MS = 5000;
@@ -179,6 +190,59 @@ export function useRetryJob() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post<JobId>(`/api/jobs/${id}/retry`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: JOBS_KEY });
+    },
+  });
+}
+
+const ME_KEY: QueryKey = ["vc", "me"];
+
+/** Starts the Drive OAuth flow: fetches the Google consent URL, then navigates the whole
+ * page there. The navigation lives in onSuccess (rather than the caller) so it's exercised
+ * by the same mutation every caller uses, and is spy-able in tests via window.location.assign. */
+export function useDriveConnect() {
+  const api = useApi();
+  return useMutation({
+    mutationFn: () => api.get<ConnectUrl>("/api/drive/connect"),
+    onSuccess: ({ url }) => {
+      window.location.assign(url);
+    },
+  });
+}
+
+export function useDisconnectDrive() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.del<void>("/api/drive/connect"),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ME_KEY });
+    },
+  });
+}
+
+/** Lists Drive files in a folder (root when folderId is empty). A server answer (409 not
+ * connected, 503 not configured, 404 folder not found) is final; only a network-level
+ * failure is retried, once. Stays fresh for a minute: browsing back into the same folder
+ * mid-session shouldn't re-hit Google every time. */
+export function useDriveFiles(folderId: string, { enabled = true }: { enabled?: boolean } = {}) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["vc", "drive", "files", folderId] as const,
+    queryFn: () =>
+      api.get<DriveFileOut[]>(`/api/drive/files?folder_id=${encodeURIComponent(folderId)}`),
+    enabled,
+    staleTime: 60_000,
+    retry: (failureCount, error) => !(error instanceof ApiError) && failureCount < 1,
+  });
+}
+
+export function useCreateDriveAnalyses() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: DriveAnalysisRequest) => api.post<JobIds>("/api/analyses", body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: JOBS_KEY });
     },
