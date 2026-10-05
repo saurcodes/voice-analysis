@@ -81,10 +81,13 @@ services:
   frontend:
     build:
       context: ./frontend
-      args:
-        VITE_KEYCLOAK_URL: ${VITE_KEYCLOAK_URL:-http://localhost:8080}
-        VITE_KEYCLOAK_REALM: ${VITE_KEYCLOAK_REALM:-vocal-coach}
-        VITE_KEYCLOAK_CLIENT_ID: ${VITE_KEYCLOAK_CLIENT_ID:-vocal-coach-web}
+    environment:
+      # Read at container start by frontend/docker-entrypoint.sh, which writes them into the
+      # runtime /config.json that src/config.ts fetches (and into the nginx CSP), so one built
+      # image can be redeployed against any Keycloak instance without a rebuild.
+      KEYCLOAK_URL: ${KEYCLOAK_URL:-http://localhost:8080}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-vocal-coach}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-vocal-coach-web}
     ports: ["3000:80"]
     depends_on:
       - backend

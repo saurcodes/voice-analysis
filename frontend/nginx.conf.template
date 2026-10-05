@@ -1,0 +1,109 @@
+gzip on;
+gzip_types text/plain text/css application/javascript application/json image/svg+xml;
+
+# Re-resolve "backend" at request time (via the /api/ location's $backend variable below)
+# instead of once at nginx startup: a recreated backend container gets a new Docker DNS
+# answer within this TTL instead of needing an nginx restart to pick it up.
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+# The Drive OAuth callback's query string carries a short-lived, single-use authorization
+# code; it is not a secret that outlives the request, but it is still not something to put in
+# a log file, so scrub it from the access log before it is written.
+map $request_uri $log_uri {
+    default $request_uri;
+    "~^(/api/drive/callback)\?.*$" "$1?[redacted]";
+}
+
+log_format scrubbed '$remote_addr - $remote_user [$time_local] "$request_method $log_uri $server_protocol" $status $body_bytes_sent';
+access_log /dev/stdout scrubbed;
+
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+
+    # Security headers applied to every response. ${KEYCLOAK_URL} is substituted by
+    # docker-entrypoint.sh (envsubst) from the container's KEYCLOAK_URL env var, so the CSP
+    # always allows exactly this deployment's Keycloak, never a wildcard.
+    #
+    # frame-src allows oidc-client-ts's silent-renew flow (automaticSilentRenew: true, see
+    # src/auth/oidc.ts): it refreshes the session through a hidden iframe whose src is the
+    # Keycloak authorization endpoint, which the default frame-src 'self' would otherwise block.
+    #
+    # add_header's inheritance is per-level: a location that defines its own add_header (the
+    # Cache-Control below) does NOT also inherit these from the server block, so they are
+    # repeated in every location that sets a Cache-Control of its own.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ${KEYCLOAK_URL}; frame-src ${KEYCLOAK_URL}; frame-ancestors 'none'; base-uri 'self'; form-action 'self' ${KEYCLOAK_URL}" always;
+
+    # Hashed build assets (Vite content-hashes the filename): safe to cache forever.
+    location /assets/ {
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ${KEYCLOAK_URL}; frame-src ${KEYCLOAK_URL}; frame-ancestors 'none'; base-uri 'self'; form-action 'self' ${KEYCLOAK_URL}" always;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    # index.html must always be revalidated or a stale shell would keep pointing at a
+    # since-replaced hashed asset.
+    location = /index.html {
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ${KEYCLOAK_URL}; frame-src ${KEYCLOAK_URL}; frame-ancestors 'none'; base-uri 'self'; form-action 'self' ${KEYCLOAK_URL}" always;
+        add_header Cache-Control "no-cache";
+    }
+
+    # Runtime config written by docker-entrypoint.sh from this container's KEYCLOAK_* env
+    # vars (src/config.ts fetches this at startup): never cache it, so the same image can be
+    # redeployed against a different Keycloak without a rebuild.
+    location = /config.json {
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ${KEYCLOAK_URL}; frame-src ${KEYCLOAK_URL}; frame-ancestors 'none'; base-uri 'self'; form-action 'self' ${KEYCLOAK_URL}" always;
+        add_header Cache-Control "no-store";
+    }
+
+    # SPA fallback: React Router owns client-side routes like /compare.
+    location / {
+        try_files $uri /index.html;
+    }
+
+    # 413 (request too large, see client_max_body_size in /api/ below) as JSON matching the
+    # backend's {"detail": ...} error shape, instead of nginx's default HTML error page.
+    error_page 413 = @json413;
+    location @json413 {
+        default_type application/json;
+        return 413 '{"detail": "file too large"}';
+    }
+
+    # Reverse proxy to the backend. Buffering and caching are off and the read timeout is long
+    # because GET /api/jobs/{id}/events is a long-lived Server-Sent-Events stream: nginx must
+    # forward each chunk as the backend writes it, not wait to fill a buffer.
+    location /api/ {
+        # A variable proxy_pass (rather than a bare upstream name) is what makes the
+        # `resolver` directive above take effect: nginx resolves $backend through it at
+        # request time instead of once at startup. Per the proxy_pass docs, a variable target
+        # with no URI part passes the matched URI through unchanged (no "/api" prefix
+        # stripping); adding a URI here would change that, so none is added.
+        set $backend "http://backend:8000";
+        proxy_pass $backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        client_max_body_size 600m;
+    }
+}

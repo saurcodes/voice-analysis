@@ -102,10 +102,16 @@ Builds `frontend/Dockerfile` (`node:22-alpine` building the Vite bundle, then `n
 serving `dist/` with the SPA fallback and an `/api/` reverse proxy to the `backend` service) and
 starts it as the `frontend` service on port 3000. Open `http://localhost:3000`.
 
-The three `VITE_KEYCLOAK_*` values are build-time only: Vite inlines `import.meta.env.*` into the
-static bundle, so there is no runtime config step in the nginx image. Set them in the root `.env`
-before building if your Keycloak is not at the compose defaults; changing them after the image is
-built needs `docker compose up -d --build frontend` again.
+Keycloak settings are read at runtime, not baked into the build: on container start,
+`docker-entrypoint.sh` writes `/usr/share/nginx/html/config.json` from the container's
+`KEYCLOAK_URL`, `KEYCLOAK_REALM` and `KEYCLOAK_CLIENT_ID` environment variables (set on the
+`frontend` service in the root `docker-compose.yml`, defaulting from the root `.env`), and
+`src/config.ts` fetches that file before the app renders. The same image can be redeployed
+against a different Keycloak just by changing those environment variables and running
+`docker compose up -d frontend` (no rebuild needed). If `/config.json` is missing or malformed,
+the app shows a "Configuration error" page instead of a blank screen. The dev server
+(`npm run dev`) serves the static `frontend/public/config.json` instead; edit that file for a
+non-default local Keycloak.
 
 The nginx `/api/` location has `proxy_buffering off`, `proxy_cache off` and a 3600s
 `proxy_read_timeout`: `GET /api/jobs/{id}/events` is a long-lived Server-Sent-Events stream and
