@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { WarningCircle } from "@phosphor-icons/react";
 import { useDismissJob, useJobs } from "@/api/hooks";
 import { JobProgressList, type JobProgressItem } from "./JobProgressList";
 
@@ -24,8 +25,13 @@ export function JobsPanel({ excludeIds = [] }: { excludeIds?: string[] }) {
   const [retried, setRetried] = useState<Record<string, string>>({});
   // Dismissed ids are removed from view immediately (optimistic), ahead of the DELETE
   // resolving: a dropped row never has to wait on a round-trip to disappear, and a 404 (the
-  // most likely failure, e.g. a double-click) is treated as success anyway.
+  // most likely failure, e.g. a double-click) is treated as success anyway. A genuine failure
+  // (anything else) rolls the id back out of this set in onError below, so the row reappears
+  // rather than staying hidden for the rest of the mount.
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  // One message per job id whose dismiss failed; cleared on the next dismiss attempt for that
+  // id (whether it succeeds or fails again).
+  const [dismissErrors, setDismissErrors] = useState<Record<string, string>>({});
 
   const excluded = new Set(excludeIds);
   const retryTargets = new Set(Object.values(retried));
@@ -55,8 +61,23 @@ export function JobsPanel({ excludeIds = [] }: { excludeIds?: string[] }) {
   }
 
   function handleDismiss(jobId: string) {
+    setDismissErrors((prev) => {
+      if (!(jobId in prev)) return prev;
+      const next = { ...prev };
+      delete next[jobId];
+      return next;
+    });
     setDismissed((prev) => new Set(prev).add(jobId));
-    dismissJob.mutate(jobId);
+    dismissJob.mutate(jobId, {
+      onError: () => {
+        setDismissed((prev) => {
+          const next = new Set(prev);
+          next.delete(jobId);
+          return next;
+        });
+        setDismissErrors((prev) => ({ ...prev, [jobId]: "Could not dismiss this job" }));
+      },
+    });
   }
 
   return (
@@ -66,6 +87,14 @@ export function JobsPanel({ excludeIds = [] }: { excludeIds?: string[] }) {
       </h2>
       <div className="mt-3">
         <JobProgressList jobs={items} onRetried={handleRetried} onDismiss={handleDismiss} />
+        {jobs
+          .filter((job) => dismissErrors[job.id])
+          .map((job) => (
+            <p key={job.id} role="alert" className="mt-2 flex items-center gap-1.5 text-sm text-serious">
+              <WarningCircle weight="regular" className="size-4 shrink-0" aria-hidden="true" />
+              {dismissErrors[job.id]}
+            </p>
+          ))}
       </div>
     </section>
   );

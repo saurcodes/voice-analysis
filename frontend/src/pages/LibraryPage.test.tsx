@@ -280,6 +280,54 @@ test("dismissing a failed job calls DELETE and removes the row", async () => {
   await waitFor(() => expect(screen.queryByText("decoder crashed")).not.toBeInTheDocument());
 });
 
+test("a dismiss the server rejects (500) rolls back: the row reappears with an alert", async () => {
+  const failedJob = jobStatus({
+    id: "job-dismiss-2",
+    status: "failed",
+    error: "decoder crashed",
+    file_name: "bad-take.wav",
+  });
+  server.use(http.get("/api/analyses", () => HttpResponse.json([])));
+  server.use(http.get("/api/jobs", () => HttpResponse.json([failedJob])));
+  server.use(
+    http.delete("/api/jobs/:id", () => HttpResponse.json({ detail: "server error" }, { status: 500 })),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+
+  expect(await screen.findByText("decoder crashed")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Dismiss" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not dismiss this job");
+  // The row itself (its failure message and Dismiss button) stays visible throughout.
+  expect(screen.getByText("decoder crashed")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+});
+
+test("dismissing an already-gone job (404) is treated as success and the row stays dismissed", async () => {
+  const failedJob = jobStatus({
+    id: "job-dismiss-3",
+    status: "failed",
+    error: "decoder crashed",
+    file_name: "bad-take.wav",
+  });
+  server.use(http.get("/api/analyses", () => HttpResponse.json([])));
+  server.use(http.get("/api/jobs", () => HttpResponse.json([failedJob])));
+  server.use(
+    http.delete("/api/jobs/:id", () => HttpResponse.json({ detail: "not found" }, { status: 404 })),
+  );
+
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+
+  expect(await screen.findByText("decoder crashed")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Dismiss" }));
+
+  await waitFor(() => expect(screen.queryByText("decoder crashed")).not.toBeInTheDocument());
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 test("a retry the server refuses (410) shows its detail inline", async () => {
   const failedJob = jobStatus({
     id: "job-failed-2",
