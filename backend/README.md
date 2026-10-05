@@ -141,9 +141,14 @@ not connected. A worker process that dies (OOM kill, segfault) fails its job wit
 
 - Retry re-uses `file_name`, the upload and `recorded_at`, but not `speaker_context` or the LLM options (a Drive retry runs
   with coaching disabled).
-- A chunked upload with no `Content-Length` is still spooled to a temp file by Starlette's form parser before the
-  `MAX_UPLOAD_MB` check runs; a declared `Content-Length` over the cap is rejected before the body is read. Under compose,
-  nginx's `client_max_body_size 600m` bounds the spool.
+- Upload size is enforced three times: a declared `Content-Length` over the cap is rejected before the body is read,
+  the request body is counted as it streams in and cut off at `MAX_UPLOAD_MB` plus one chunk of multipart slack
+  (before Starlette's form parser spools it), and the stored file is counted again while it is written.
+- The Drive branch of `POST /analyses` and `POST /jobs/{id}/retry` still make synchronous DB calls on the event loop
+  (the multipart upload route runs them in a thread). The worst case is the `FOR UPDATE` wait in the retry route while a
+  concurrent delete holds the lock; short in practice.
+- Cache pruning protects only the download in progress. With `JOB_WORKERS` above 1, another worker's just-downloaded
+  source can be evicted before it is analysed, and the cache can exceed `CACHE_MAX_MB` by one download.
 
 ## Frontend (Plan 5)
 
